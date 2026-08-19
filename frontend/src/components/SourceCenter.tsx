@@ -124,7 +124,7 @@ export function SourceCenter(props: SourceCenterProps) {
       setMcpServers(servers)
       const match = servers.find((item) => item.connectable && item.tapd_capable)
       if (match) await loadMcpProjects(match.endpoint_url)
-      else setMcpError('没有发现带只读 TAPD 需求工具的本地 MCP Server。可填写本机 MCP 地址后重试。')
+      else setMcpError('没有发现可用的 TAPD MCP。若已显示配置错误，请先修复对应 MCP 服务；也可填写回环地址后重试。')
     } catch (error) {
       setMcpError(error instanceof Error ? error.message : 'MCP 自动检测失败')
     } finally {
@@ -192,7 +192,7 @@ export function SourceCenter(props: SourceCenterProps) {
         <section className="source-section">
           <div className="source-options">
             <SourceOption icon={FileText} title="需求文档" description="Markdown、TXT、DOCX、JSON、YAML" action="选择文件" onClick={() => requirementFileRef.current?.click()} />
-            <SourceOption icon={Database} title="TAPD" description="自动连接本地 MCP Server，并选择 TAPD 项目" action="检测 MCP" onClick={openTapdMcp} />
+            <SourceOption icon={Database} title="TAPD" description="读取本机 MCP 配置，并选择 TAPD 项目" action="检测 MCP" onClick={openTapdMcp} />
             <SourceOption icon={BookOpen} title="外部知识库" description="连接返回 JSON 或文本的 HTTPS REST API" action="配置连接" onClick={() => openConnector('external_knowledge')} />
           </div>
           <input ref={requirementFileRef} hidden type="file" accept=".md,.txt,.docx,.json,.yaml,.yml" onChange={(event) => {
@@ -204,11 +204,11 @@ export function SourceCenter(props: SourceCenterProps) {
           {showTapdMcp ? (
             <div className="connector-editor mcp-editor">
               <div className="section-title">
-                <div><strong>连接本地 TAPD MCP</strong><p>自动完成 MCP 握手、工具发现和项目读取；TAPD Token 始终由本地 MCP Server 管理。</p></div>
+                <div><strong>连接已注册的 TAPD MCP</strong><p>自动读取 Codex、Cursor、Claude 等本机配置并完成握手；凭据只在连接时从原配置解析。</p></div>
                 <button className="link-button" onClick={() => setShowTapdMcp(false)} type="button">取消</button>
               </div>
               <div className="mcp-discovery-row">
-                <label>本机 MCP 地址（可选）<input type="url" placeholder="http://127.0.0.1:3000/mcp" value={manualMcpUrl} onChange={(event) => setManualMcpUrl(event.target.value)} /></label>
+                <label>回环 MCP 地址（可选）<input type="url" placeholder="http://127.0.0.1:3000/mcp" value={manualMcpUrl} onChange={(event) => setManualMcpUrl(event.target.value)} /></label>
                 <button className="button secondary" disabled={mcpBusy} onClick={() => void discoverMcp()} type="button"><RefreshCw className={mcpBusy ? 'spinning' : ''} size={15} />{mcpBusy ? '正在检测' : '自动检测'}</button>
               </div>
               {mcpServers.length > 0 ? (

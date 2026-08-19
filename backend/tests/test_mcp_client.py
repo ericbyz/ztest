@@ -7,6 +7,7 @@ import json
 import httpx
 import pytest
 
+from app import mcp_client
 from app.mcp_client import (
     McpError,
     McpTool,
@@ -21,10 +22,76 @@ from app.mcp_client import (
 def test_mcp_url_is_restricted_to_loopback() -> None:
     assert validate_local_mcp_url("http://127.0.0.1:3333/mcp") == "http://127.0.0.1:3333/mcp"
     assert validate_local_mcp_url("http://localhost:8001/mcp/") == "http://localhost:8001/mcp"
-    with pytest.raises(McpError, match="回环地址"):
+    with pytest.raises(McpError, match="回环地址|手工"):
         validate_local_mcp_url("https://mcp.example.com/mcp")
     with pytest.raises(McpError, match="用户名或密码"):
         validate_local_mcp_url("http://user:secret@localhost:3000/mcp")
+
+
+def test_codex_toml_registration_is_discovered_without_exposing_headers(
+    tmp_path, monkeypatch
+) -> None:
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir()
+    (codex_dir / "config.toml").write_text(
+        """
+[mcp_servers.tapd]
+type = "http"
+url = "https://registered.example.com/mcp"
+
+[mcp_servers.tapd.http_headers]
+Authorization = "private-test-header"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mcp_client.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+
+    servers, _ = mcp_client._config_candidates()
+
+    assert [(server.name, server.url) for server in servers] == [
+        ("Codex · tapd", "https://registered.example.com/mcp")
+    ]
+    assert mcp_client.validate_registered_mcp_url(
+        "https://registered.example.com/mcp"
+    ) == "https://registered.example.com/mcp"
+    assert "private-test-header" not in repr(
+        {
+            "name": servers[0].name,
+            "endpoint_url": servers[0].url,
+            "transport": "streamable_http",
+        }
+    )
+
+
+def test_failed_registered_server_remains_visible(monkeypatch) -> None:
+    server = mcp_client.McpServerConfig(
+        name="Codex · tapd",
+        url="https://registered.example.com/mcp",
+        headers={"Authorization": "private-test-header"},
+    )
+    monkeypatch.setattr(mcp_client, "_config_candidates", lambda: ([server], []))
+
+    class OpenSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    monkeypatch.setattr(mcp_client.socket, "create_connection", lambda *_, **__: OpenSocket())
+    monkeypatch.setattr(
+        mcp_client,
+        "inspect_server",
+        lambda *_, **__: (_ for _ in ()).throw(McpError("HTTP 500")),
+    )
+
+    results = mcp_client.discover_local_servers()
+
+    assert results[0]["name"] == "Codex · tapd"
+    assert results[0]["connectable"] is False
+    assert "已发现配置" in results[0]["error"]
+    assert "private-test-header" not in repr(results)
 
 
 def test_streamable_http_handshake_lists_and_calls_tools() -> None:

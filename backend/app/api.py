@@ -28,7 +28,7 @@ from .mcp_client import (
     discover_local_servers,
     fetch_tapd_requirements,
     list_tapd_projects,
-    validate_local_mcp_url,
+    validate_registered_mcp_url,
 )
 from .models import (
     ApiOperation,
@@ -415,7 +415,7 @@ def connect_tapd_mcp(
 
     _project_or_404(session, project_id)
     try:
-        endpoint_url = validate_local_mcp_url(payload.endpoint_url)
+        endpoint_url = validate_registered_mcp_url(payload.endpoint_url)
         projects, project_tool, requirement_tool = list_tapd_projects(endpoint_url)
     except McpError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

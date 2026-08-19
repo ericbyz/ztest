@@ -36,7 +36,7 @@ npm run dev
 ### 多来源与知识库
 
 - 需求文件支持 Markdown、TXT、DOCX、JSON 和 YAML。
-- TAPD 优先连接已经运行在本机回环地址上的 Streamable HTTP MCP Server。接入中心会自动执行 MCP 握手、发现只读工具、读取 TAPD 项目列表，并让用户选择一个项目后再建立绑定。
+- TAPD 会读取 Codex、Cursor、Claude 等本机 MCP 注册信息，也会探测已经运行在回环地址上的 Streamable HTTP MCP Server。接入中心会自动执行 MCP 握手、发现只读工具、读取 TAPD 项目列表，并让用户选择一个项目后再建立绑定。
 - TAPD Token 由本地 MCP Server 自己的环境变量或私有配置管理，本工具只保存 MCP 回环地址、所选项目 ID 和工具名，不读取也不保存 TAPD Token。
 - 外部知识库使用可配置的公开 HTTPS 查询地址；Bearer、API Key Header 与 Basic 凭据均为只写 Secret。
 - 每个项目可以创建多个组件文件知识库，上传的原文件保存在 `backend/.local/knowledge/`，解析文本保存在本地 SQLite。
@@ -44,9 +44,9 @@ npm run dev
 
 ### TAPD 本地 MCP
 
-MCP Server 需要暴露 Streamable HTTP 地址，例如 `http://127.0.0.1:3333/mcp`。系统只允许 `localhost`、`127.0.0.1` 和 `::1`，不会通过 MCP 通道访问远端或局域网地址。
+MCP Server 需要暴露 Streamable HTTP 地址，例如 `http://127.0.0.1:3333/mcp`。手工填写的地址只允许 `localhost`、`127.0.0.1` 和 `::1`。远程 MCP 仅在其完整 HTTPS 地址已经明确登记于本机 MCP 配置时才会被信任，配置移除后连接立即失效。
 
-自动发现会读取常见 MCP 配置中的 URL（不会返回其中的命令、参数或环境变量），并探测少量常用本机端口。也可以通过环境变量补充地址：
+自动发现会读取 `~/.codex/config.toml` 及常见 JSON MCP 配置中的 URL，并探测少量常用本机端口。配置中的 Header、环境变量、命令和参数不会通过接口返回或写入数据库；需要的 Header 只在连接时从原配置解析。也可以通过环境变量补充回环地址：
 
 ```powershell
 $env:AI_TEST_MCP_DISCOVERY_URLS="http://127.0.0.1:3333/mcp,http://127.0.0.1:9000/mcp"

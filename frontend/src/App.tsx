@@ -165,7 +165,7 @@ export default function App() {
   const discoverTapdMcp = async (endpointUrl: string): Promise<McpServerCandidate[]> => {
     try {
       const servers = await api.discoverTapdMcp(endpointUrl)
-      setToast(servers.some((item) => item.tapd_capable) ? '已发现可用的本地 TAPD MCP Server' : '未发现可用的 TAPD MCP Server')
+      setToast(servers.some((item) => item.tapd_capable) ? '已发现可用的 TAPD MCP Server' : '已完成 MCP 配置扫描，请查看检测结果')
       return servers
     } catch (error) {
       setToast(error instanceof Error ? error.message : 'MCP 自动检测失败')
