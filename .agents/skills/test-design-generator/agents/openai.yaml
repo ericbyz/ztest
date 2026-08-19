@@ -1,0 +1,6 @@
+interface:
+  display_name: "Test Design Generator"
+  short_description: "Generate test plans, flows, scenarios, and cases"
+  default_prompt: "Use $test-design-generator to turn my requirement and API sources into traceable test flows and cases at the requested output location."
+policy:
+  allow_implicit_invocation: true
