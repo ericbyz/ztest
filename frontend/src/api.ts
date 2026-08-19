@@ -12,6 +12,9 @@ import type {
   Scenario,
   SourceConnector,
   SourceConnectorCreate,
+  McpServerCandidate,
+  TapdMcpConnect,
+  TapdMcpProjects,
   ApiSpecType,
 } from './types'
 
@@ -57,6 +60,24 @@ export const api = {
     }),
   syncSource: (sourceId: string) =>
     request<DocumentItem>(`/api/sources/${sourceId}:sync`, { method: 'POST' }),
+  discoverTapdMcp: (endpointUrl = '') =>
+    request<McpServerCandidate[]>('/api/mcp/tapd:discover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint_url: endpointUrl }),
+    }),
+  tapdMcpProjects: (endpointUrl: string) =>
+    request<TapdMcpProjects>('/api/mcp/tapd:projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint_url: endpointUrl }),
+    }),
+  connectTapdMcp: (projectId: string, payload: TapdMcpConnect) =>
+    request<SourceConnector>(`/api/projects/${projectId}/sources:connect-tapd-mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
   knowledgeBases: (projectId: string) =>
     request<KnowledgeBaseItem[]>(`/api/projects/${projectId}/knowledge-bases`),
   createKnowledgeBase: (projectId: string, payload: { name: string; description: string }) =>

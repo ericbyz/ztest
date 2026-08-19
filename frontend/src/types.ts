@@ -138,6 +138,36 @@ export interface SourceConnectorCreate {
   request_params: Record<string, string>
 }
 
+export interface McpServerCandidate {
+  name: string
+  endpoint_url: string
+  transport: 'streamable_http' | 'stdio'
+  connectable: boolean
+  tapd_capable: boolean
+  tools: string[]
+  project_tool: string
+  requirement_tool: string
+  error: string
+}
+
+export interface TapdMcpProject {
+  id: string
+  name: string
+}
+
+export interface TapdMcpProjects {
+  projects: TapdMcpProject[]
+  project_tool: string
+  requirement_tool: string
+}
+
+export interface TapdMcpConnect {
+  endpoint_url: string
+  tapd_project_id: string
+  tapd_project_name: string
+  name: string
+}
+
 export interface KnowledgeBaseItem {
   id: string
   project_id: string

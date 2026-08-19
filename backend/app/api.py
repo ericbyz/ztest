@@ -23,6 +23,13 @@ from .local_store import (
     set_secret,
     store_knowledge_file,
 )
+from .mcp_client import (
+    McpError,
+    discover_local_servers,
+    fetch_tapd_requirements,
+    list_tapd_projects,
+    validate_local_mcp_url,
+)
 from .models import (
     ApiOperation,
     Document,
@@ -48,6 +55,7 @@ from .schemas import (
     KnowledgeSearchResult,
     LlmConfigurationUpdate,
     LlmConfigurationView,
+    McpServerView,
     OperationView,
     ProjectCreate,
     ProjectUpdate,
@@ -61,6 +69,10 @@ from .schemas import (
     ScenarioView,
     SourceConnectorCreate,
     SourceConnectorView,
+    TapdMcpConnect,
+    TapdMcpDiscover,
+    TapdMcpProjectsRequest,
+    TapdMcpProjectsView,
 )
 from .security import UnsafeTargetError, validate_target
 from .services import (
@@ -364,6 +376,77 @@ def list_sources(project_id: str, session: SessionDep) -> list[SourceConnectorVi
     return [_source_view(row) for row in rows]
 
 
+@router.post("/mcp/tapd:discover", response_model=list[McpServerView])
+def discover_tapd_mcp(payload: TapdMcpDiscover) -> list[dict[str, Any]]:
+    """Discover running loopback MCP servers without reading or returning credentials."""
+
+    try:
+        return discover_local_servers(payload.endpoint_url)
+    except McpError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/mcp/tapd:projects", response_model=TapdMcpProjectsView)
+def tapd_mcp_projects(payload: TapdMcpProjectsRequest) -> TapdMcpProjectsView:
+    """Return TAPD projects exposed by one selected local MCP server."""
+
+    try:
+        projects, project_tool, requirement_tool = list_tapd_projects(payload.endpoint_url)
+    except McpError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return TapdMcpProjectsView(
+        projects=[{"id": project.id, "name": project.name} for project in projects],
+        project_tool=project_tool,
+        requirement_tool=requirement_tool,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/sources:connect-tapd-mcp",
+    response_model=SourceConnectorView,
+    status_code=status.HTTP_201_CREATED,
+)
+def connect_tapd_mcp(
+    project_id: str,
+    payload: TapdMcpConnect,
+    session: SessionDep,
+) -> SourceConnectorView:
+    """Bind one selected TAPD project to this test project through local MCP."""
+
+    _project_or_404(session, project_id)
+    try:
+        endpoint_url = validate_local_mcp_url(payload.endpoint_url)
+        projects, project_tool, requirement_tool = list_tapd_projects(endpoint_url)
+    except McpError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    matched = next((item for item in projects if item.id == payload.tapd_project_id), None)
+    if projects and matched is None:
+        raise HTTPException(status_code=422, detail="所选 TAPD 项目已不存在，请重新获取项目列表")
+    project_name = matched.name if matched else payload.tapd_project_name
+    source = SourceConnector(
+        id=new_id("src"),
+        project_id=project_id,
+        name=payload.name,
+        source_type="tapd",
+        endpoint_url=endpoint_url,
+        workspace_id=payload.tapd_project_id,
+        auth_type="none",
+        auth_header="",
+        config_json=dumps(
+            {
+                "transport": "mcp_streamable_http",
+                "tapd_project_name": project_name,
+                "project_tool": project_tool,
+                "requirement_tool": requirement_tool,
+            }
+        ),
+        status="connected",
+    )
+    session.add(source)
+    session.commit()
+    return _source_view(source)
+
+
 @router.post(
     "/projects/{project_id}/sources",
     response_model=SourceConnectorView,
@@ -378,7 +461,10 @@ def create_source(
 
     _project_or_404(session, project_id)
     sensitive_names = {"token", "key", "secret", "password", "authorization"}
-    if any(any(marker in key.lower() for marker in sensitive_names) for key in payload.request_params):
+    if any(
+        any(marker in key.lower() for marker in sensitive_names)
+        for key in payload.request_params
+    ):
         raise HTTPException(status_code=422, detail="敏感参数必须填写在 Secret 字段，不能写入请求参数")
     source = SourceConnector(
         id=new_id("src"),
@@ -408,6 +494,29 @@ def sync_source(source_id: str, session: SessionDep) -> DocumentView:
     source = session.get(SourceConnector, source_id)
     if not source:
         raise HTTPException(status_code=404, detail="来源连接器不存在")
+    params = loads(source.config_json, {})
+    if source.source_type == "tapd" and params.get("transport") == "mcp_streamable_http":
+        try:
+            payload, selected_tool = fetch_tapd_requirements(
+                source.endpoint_url,
+                source.workspace_id,
+                str(params.get("requirement_tool", "")),
+            )
+        except McpError as exc:
+            source.status = "error"
+            session.commit()
+            raise HTTPException(status_code=422, detail=f"TAPD MCP 同步失败：{exc}") from exc
+        params["requirement_tool"] = selected_tool
+        source.config_json = dumps(params)
+        text = external_payload_to_text(payload)
+        raw_content = (
+            dumps(payload).encode("utf-8")
+            if not isinstance(payload, str)
+            else payload.encode("utf-8")
+        )
+        source_uri = f"mcp+{source.endpoint_url}#project={source.workspace_id}&tool={selected_tool}"
+        return _persist_synced_source(session, source, text, raw_content, source_uri)
+
     host = urlparse(source.endpoint_url).hostname
     try:
         validate_target(source.endpoint_url, [host] if host else [])
@@ -426,7 +535,6 @@ def sync_source(source_id: str, session: SessionDep) -> DocumentView:
         encoded = b64encode(secret.encode("utf-8")).decode("ascii")
         headers[source.auth_header] = f"Basic {encoded}"
 
-    params = loads(source.config_json, {})
     if source.workspace_id and "workspace_id" not in params:
         params["workspace_id"] = source.workspace_id
     try:
@@ -448,6 +556,24 @@ def sync_source(source_id: str, session: SessionDep) -> DocumentView:
     except ValueError:
         payload = response.text
     text = external_payload_to_text(payload)
+    return _persist_synced_source(
+        session,
+        source,
+        text,
+        response.content,
+        source.endpoint_url,
+    )
+
+
+def _persist_synced_source(
+    session: Session,
+    source: SourceConnector,
+    text: str,
+    raw_content: bytes,
+    source_uri: str,
+) -> DocumentView:
+    """Persist one connector result with project-scoped traceability."""
+
     document_name = f"{source.name}-{utc_now().strftime('%Y%m%d-%H%M%S')}.txt"
     requirements = parse_requirements(source.project_id, document_name, text)
     for requirement in requirements:
@@ -458,12 +584,12 @@ def sync_source(source_id: str, session: SessionDep) -> DocumentView:
         name=document_name,
         kind="requirement",
         version=1,
-        checksum=checksum(response.content),
+        checksum=checksum(raw_content),
         content=text,
         issues_json=dumps([] if requirements else ["同步成功，但未识别出可测试需求"]),
         source_type=source.source_type,
-        source_uri=source.endpoint_url,
-        size_bytes=len(response.content),
+        source_uri=source_uri,
+        size_bytes=len(raw_content),
     )
     source.status = "synced"
     source.last_sync_at = utc_now()

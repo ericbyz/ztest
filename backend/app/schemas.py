@@ -112,6 +112,56 @@ class SourceConnectorView(BaseModel):
     created_at: datetime
 
 
+class TapdMcpDiscover(BaseModel):
+    """Optional manual endpoint used alongside automatic local discovery."""
+
+    endpoint_url: str = Field(default="", max_length=500)
+
+
+class McpServerView(BaseModel):
+    """Sanitized local MCP discovery result; never includes process env or credentials."""
+
+    name: str
+    endpoint_url: str
+    transport: Literal["streamable_http", "stdio"]
+    connectable: bool
+    tapd_capable: bool
+    tools: list[str]
+    project_tool: str
+    requirement_tool: str
+    error: str
+
+
+class TapdMcpProjectView(BaseModel):
+    """A selectable TAPD workspace/project exposed by the local MCP server."""
+
+    id: str
+    name: str
+
+
+class TapdMcpProjectsRequest(BaseModel):
+    """Request project options from one loopback MCP endpoint."""
+
+    endpoint_url: str = Field(min_length=8, max_length=500)
+
+
+class TapdMcpProjectsView(BaseModel):
+    """Project options and compatible tool metadata."""
+
+    projects: list[TapdMcpProjectView]
+    project_tool: str
+    requirement_tool: str
+
+
+class TapdMcpConnect(BaseModel):
+    """Bind one TAPD project to the current test project through local MCP."""
+
+    endpoint_url: str = Field(min_length=8, max_length=500)
+    tapd_project_id: str = Field(min_length=1, max_length=160)
+    tapd_project_name: str = Field(default="", max_length=160)
+    name: str = Field(default="TAPD MCP", min_length=2, max_length=160)
+
+
 class KnowledgeBaseCreate(BaseModel):
     """Create a project-scoped private file knowledge base."""
 

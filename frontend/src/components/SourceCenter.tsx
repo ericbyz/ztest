@@ -10,6 +10,7 @@ import {
   Link2,
   Plus,
   RefreshCw,
+  Server,
   ShieldCheck,
   Upload,
 } from 'lucide-react'
@@ -18,8 +19,11 @@ import type {
   ApiSpecType,
   DocumentItem,
   KnowledgeBaseItem,
+  McpServerCandidate,
   SourceConnector,
   SourceConnectorCreate,
+  TapdMcpConnect,
+  TapdMcpProjects,
 } from '../types'
 
 type SourceTab = 'requirements' | 'api' | 'knowledge'
@@ -33,6 +37,9 @@ interface SourceCenterProps {
   onImportApiUrl: (url: string, type: ApiSpecType) => Promise<void>
   onCreateSource: (payload: SourceConnectorCreate) => Promise<void>
   onSyncSource: (sourceId: string) => Promise<void>
+  onDiscoverTapdMcp: (endpointUrl: string) => Promise<McpServerCandidate[]>
+  onLoadTapdProjects: (endpointUrl: string) => Promise<TapdMcpProjects>
+  onConnectTapdMcp: (payload: TapdMcpConnect) => Promise<void>
   onCreateKnowledgeBase: (payload: { name: string; description: string }) => Promise<void>
   onUploadKnowledge: (knowledgeBaseId: string, file: File) => Promise<void>
   onExtractKnowledge: (knowledgeBaseId: string) => Promise<void>
@@ -63,6 +70,16 @@ export function SourceCenter(props: SourceCenterProps) {
   const [apiUrl, setApiUrl] = useState('')
   const [connector, setConnector] = useState<SourceConnectorCreate>(EMPTY_CONNECTOR)
   const [showConnector, setShowConnector] = useState(false)
+  const [showTapdMcp, setShowTapdMcp] = useState(false)
+  const [manualMcpUrl, setManualMcpUrl] = useState('')
+  const [mcpServers, setMcpServers] = useState<McpServerCandidate[]>([])
+  const [selectedMcpUrl, setSelectedMcpUrl] = useState('')
+  const [tapdProjects, setTapdProjects] = useState<TapdMcpProjects>({ projects: [], project_tool: '', requirement_tool: '' })
+  const [tapdProjectId, setTapdProjectId] = useState('')
+  const [tapdProjectName, setTapdProjectName] = useState('')
+  const [tapdConnectionName, setTapdConnectionName] = useState('TAPD MCP')
+  const [mcpBusy, setMcpBusy] = useState(false)
+  const [mcpError, setMcpError] = useState('')
   const [knowledgeName, setKnowledgeName] = useState('')
   const [knowledgeDescription, setKnowledgeDescription] = useState('')
   const [knowledgeTarget, setKnowledgeTarget] = useState('')
@@ -77,6 +94,67 @@ export function SourceCenter(props: SourceCenterProps) {
       name: sourceType === 'tapd' ? 'TAPD 需求' : '外部知识库',
     })
     setShowConnector(true)
+  }
+
+  const loadMcpProjects = async (endpointUrl: string) => {
+    setSelectedMcpUrl(endpointUrl)
+    setMcpError('')
+    setTapdProjectId('')
+    setTapdProjectName('')
+    try {
+      const result = await props.onLoadTapdProjects(endpointUrl)
+      setTapdProjects(result)
+      const first = result.projects[0]
+      if (first) {
+        setTapdProjectId(first.id)
+        setTapdProjectName(first.name)
+      }
+    } catch (error) {
+      setTapdProjects({ projects: [], project_tool: '', requirement_tool: '' })
+      setMcpError(error instanceof Error ? error.message : '无法读取 TAPD 项目')
+    }
+  }
+
+  const discoverMcp = async () => {
+    setMcpBusy(true)
+    setMcpError('')
+    setMcpServers([])
+    try {
+      const servers = await props.onDiscoverTapdMcp(manualMcpUrl.trim())
+      setMcpServers(servers)
+      const match = servers.find((item) => item.connectable && item.tapd_capable)
+      if (match) await loadMcpProjects(match.endpoint_url)
+      else setMcpError('没有发现带只读 TAPD 需求工具的本地 MCP Server。可填写本机 MCP 地址后重试。')
+    } catch (error) {
+      setMcpError(error instanceof Error ? error.message : 'MCP 自动检测失败')
+    } finally {
+      setMcpBusy(false)
+    }
+  }
+
+  const openTapdMcp = () => {
+    setShowTapdMcp(true)
+    setShowConnector(false)
+    if (mcpServers.length === 0) void discoverMcp()
+  }
+
+  const connectMcp = async () => {
+    const selectedProject = tapdProjects.projects.find((item) => item.id === tapdProjectId)
+    setMcpBusy(true)
+    setMcpError('')
+    try {
+      await props.onConnectTapdMcp({
+        endpoint_url: selectedMcpUrl,
+        tapd_project_id: tapdProjectId,
+        tapd_project_name: selectedProject?.name || tapdProjectName,
+        name: tapdConnectionName,
+      })
+      setShowTapdMcp(false)
+    } catch (error) {
+      setMcpError(error instanceof Error ? error.message : 'TAPD MCP 连接失败')
+    } finally {
+      setMcpBusy(false)
+    }
   }
 
   const submitConnector = async () => {
@@ -114,7 +192,7 @@ export function SourceCenter(props: SourceCenterProps) {
         <section className="source-section">
           <div className="source-options">
             <SourceOption icon={FileText} title="需求文档" description="Markdown、TXT、DOCX、JSON、YAML" action="选择文件" onClick={() => requirementFileRef.current?.click()} />
-            <SourceOption icon={Database} title="TAPD" description="连接工作空间需求或故事查询接口" action="配置连接" onClick={() => openConnector('tapd')} />
+            <SourceOption icon={Database} title="TAPD" description="自动连接本地 MCP Server，并选择 TAPD 项目" action="检测 MCP" onClick={openTapdMcp} />
             <SourceOption icon={BookOpen} title="外部知识库" description="连接返回 JSON 或文本的 HTTPS REST API" action="配置连接" onClick={() => openConnector('external_knowledge')} />
           </div>
           <input ref={requirementFileRef} hidden type="file" accept=".md,.txt,.docx,.json,.yaml,.yml" onChange={(event) => {
@@ -123,14 +201,64 @@ export function SourceCenter(props: SourceCenterProps) {
             event.currentTarget.value = ''
           }} />
 
+          {showTapdMcp ? (
+            <div className="connector-editor mcp-editor">
+              <div className="section-title">
+                <div><strong>连接本地 TAPD MCP</strong><p>自动完成 MCP 握手、工具发现和项目读取；TAPD Token 始终由本地 MCP Server 管理。</p></div>
+                <button className="link-button" onClick={() => setShowTapdMcp(false)} type="button">取消</button>
+              </div>
+              <div className="mcp-discovery-row">
+                <label>本机 MCP 地址（可选）<input type="url" placeholder="http://127.0.0.1:3000/mcp" value={manualMcpUrl} onChange={(event) => setManualMcpUrl(event.target.value)} /></label>
+                <button className="button secondary" disabled={mcpBusy} onClick={() => void discoverMcp()} type="button"><RefreshCw className={mcpBusy ? 'spinning' : ''} size={15} />{mcpBusy ? '正在检测' : '自动检测'}</button>
+              </div>
+              {mcpServers.length > 0 ? (
+                <div className="mcp-server-list" role="list" aria-label="发现的 MCP Server">
+                  {mcpServers.map((server, index) => (
+                    <button
+                      className={`mcp-server ${selectedMcpUrl === server.endpoint_url && server.endpoint_url ? 'selected' : ''}`}
+                      disabled={!server.connectable || !server.tapd_capable}
+                      key={`${server.name}-${server.endpoint_url || index}`}
+                      onClick={() => void loadMcpProjects(server.endpoint_url)}
+                      type="button"
+                    >
+                      <span className="mcp-server-icon"><Server size={17} /></span>
+                      <span><strong>{server.name}</strong><small>{server.endpoint_url || 'stdio MCP 配置'}</small></span>
+                      <span className={server.tapd_capable ? 'mcp-ready' : 'mcp-unavailable'}>{server.tapd_capable ? 'TAPD 可用' : server.error}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {selectedMcpUrl ? (
+                <div className="mcp-project-panel">
+                  <div className="mcp-connection-ok"><CheckCircle2 size={16} /><span>已连接 MCP：发现需求工具 <code>{tapdProjects.requirement_tool || '正在读取'}</code></span></div>
+                  <div className="form-grid">
+                    <label>连接名称<input value={tapdConnectionName} onChange={(event) => setTapdConnectionName(event.target.value)} /></label>
+                    {tapdProjects.projects.length > 0 ? (
+                      <label>选择 TAPD 项目<select value={tapdProjectId} onChange={(event) => {
+                        const value = event.target.value
+                        setTapdProjectId(value)
+                        setTapdProjectName(tapdProjects.projects.find((item) => item.id === value)?.name || '')
+                      }}>{tapdProjects.projects.map((project) => <option value={project.id} key={project.id}>{project.name}（{project.id}）</option>)}</select></label>
+                    ) : (
+                      <label>TAPD 项目 ID<input placeholder="MCP 未提供项目列表时手工填写" value={tapdProjectId} onChange={(event) => setTapdProjectId(event.target.value)} /></label>
+                    )}
+                  </div>
+                  {tapdProjects.projects.length === 0 ? <p className="mcp-hint">该 MCP 没有可调用的项目列表工具，仍可使用项目 ID 建立绑定。</p> : <p className="mcp-hint">已读取 {tapdProjects.projects.length} 个可选项目，同步时只会传入所选项目 ID。</p>}
+                </div>
+              ) : null}
+              {mcpError ? <div className="mcp-error"><AlertTriangle size={15} />{mcpError}</div> : null}
+              <button className="button primary" disabled={mcpBusy || !selectedMcpUrl || !tapdProjectId || tapdConnectionName.trim().length < 2} onClick={() => void connectMcp()} type="button"><Link2 size={16} />连接所选项目</button>
+            </div>
+          ) : null}
+
           {showConnector ? (
             <div className="connector-editor">
-              <div className="section-title"><div><strong>{connector.source_type === 'tapd' ? '配置 TAPD 来源' : '配置外部知识库'}</strong><p>凭据为写入后不可读取的本地 Secret。</p></div><button className="link-button" onClick={() => setShowConnector(false)} type="button">取消</button></div>
+              <div className="section-title"><div><strong>配置外部知识库</strong><p>凭据为写入后不可读取的本地 Secret。</p></div><button className="link-button" onClick={() => setShowConnector(false)} type="button">取消</button></div>
               <div className="form-grid">
                 <label>连接名称<input value={connector.name} onChange={(event) => setConnector((current) => ({ ...current, name: event.target.value }))} /></label>
                 <label>认证方式<select value={connector.auth_type} onChange={(event) => setConnector((current) => ({ ...current, auth_type: event.target.value as SourceConnectorCreate['auth_type'] }))}><option value="bearer">Bearer Token</option><option value="api_key">API Key Header</option><option value="basic">Basic（用户名:密码）</option><option value="none">无需认证</option></select></label>
                 <label className="span-2">HTTPS 查询地址<input type="url" placeholder="https://api.example.com/requirements" value={connector.endpoint_url} onChange={(event) => setConnector((current) => ({ ...current, endpoint_url: event.target.value }))} /></label>
-                <label>工作空间 ID<input placeholder="可选；TAPD 通常需要" value={connector.workspace_id} onChange={(event) => setConnector((current) => ({ ...current, workspace_id: event.target.value }))} /></label>
+                <label>查询范围 ID<input placeholder="可选" value={connector.workspace_id} onChange={(event) => setConnector((current) => ({ ...current, workspace_id: event.target.value }))} /></label>
                 <label>认证 Header<input value={connector.auth_header} onChange={(event) => setConnector((current) => ({ ...current, auth_header: event.target.value }))} /></label>
                 <label className="span-2">Secret<input type="password" autoComplete="new-password" placeholder="只写入 backend/.local，不进入数据库或 Git" value={connector.secret ?? ''} onChange={(event) => setConnector((current) => ({ ...current, secret: event.target.value }))} /></label>
               </div>
@@ -143,8 +271,8 @@ export function SourceCenter(props: SourceCenterProps) {
             {props.sources.length === 0 ? <EmptySource text="尚未配置 TAPD 或外部知识库。" /> : props.sources.map((source) => (
               <article className="source-row" key={source.id}>
                 <div className={`source-status ${source.status}`}><Link2 size={17} /></div>
-                <div><strong>{source.name}</strong><p>{source.source_type === 'tapd' ? 'TAPD' : '外部知识库'} · {new URL(source.endpoint_url).hostname}</p></div>
-                <span className={source.has_secret ? 'secret-ok' : 'secret-missing'}>{source.has_secret ? 'Secret 已配置' : '缺少 Secret'}</span>
+                <div><strong>{source.name}</strong><p>{source.source_type === 'tapd' ? `TAPD · ${source.request_params.tapd_project_name || source.workspace_id}` : '外部知识库'} · {new URL(source.endpoint_url).hostname}</p></div>
+                {source.request_params.transport === 'mcp_streamable_http' ? <span className="secret-ok">凭据由 MCP 管理</span> : <span className={source.has_secret ? 'secret-ok' : 'secret-missing'}>{source.has_secret ? 'Secret 已配置' : '缺少 Secret'}</span>}
                 <button className="button secondary" onClick={() => void props.onSyncSource(source.id)} type="button"><RefreshCw size={14} />同步</button>
               </article>
             ))}

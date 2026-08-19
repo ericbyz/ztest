@@ -16,7 +16,8 @@ import { ApiView, ReportsView, RequirementsView } from './components/WorkspaceVi
 import type {
   ApiSpecType, Dashboard, DocumentItem, EnvironmentItem, KnowledgeBaseItem,
   LlmConfiguration, LlmConfigurationUpdate, NavKey, OperationItem, Project,
-  RequirementItem, Run, Scenario, SourceConnector, SourceConnectorCreate,
+  McpServerCandidate, RequirementItem, Run, Scenario, SourceConnector, SourceConnectorCreate,
+  TapdMcpConnect, TapdMcpProjects,
 } from './types'
 
 interface ProjectData {
@@ -161,6 +162,38 @@ export default function App() {
     } catch (error) { setToast(error instanceof Error ? error.message : '来源同步失败') }
   }
 
+  const discoverTapdMcp = async (endpointUrl: string): Promise<McpServerCandidate[]> => {
+    try {
+      const servers = await api.discoverTapdMcp(endpointUrl)
+      setToast(servers.some((item) => item.tapd_capable) ? '已发现可用的本地 TAPD MCP Server' : '未发现可用的 TAPD MCP Server')
+      return servers
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'MCP 自动检测失败')
+      throw error
+    }
+  }
+
+  const loadTapdProjects = async (endpointUrl: string): Promise<TapdMcpProjects> => {
+    try {
+      return await api.tapdMcpProjects(endpointUrl)
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'TAPD 项目列表读取失败')
+      throw error
+    }
+  }
+
+  const connectTapdMcp = async (payload: TapdMcpConnect) => {
+    if (!activeProjectId) return
+    try {
+      await api.connectTapdMcp(activeProjectId, payload)
+      await refreshProject()
+      setToast(`已通过本地 MCP 绑定 TAPD 项目：${payload.tapd_project_name || payload.tapd_project_id}`)
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'TAPD MCP 连接失败')
+      throw error
+    }
+  }
+
   const createKnowledgeBase = async (payload: { name: string; description: string }) => {
     if (!activeProjectId) return
     try {
@@ -300,7 +333,7 @@ export default function App() {
         </header>
         <main className="page-content">
           {nav === 'overview' ? <Overview dashboard={dashboard} data={data} onNavigate={setNav} onSelectRun={setSelectedRun} activeScenario={activeScenario} running={running} runMode={runMode} onModeChange={setRunMode} onRun={runScenario} onApprove={approveScenario} onSave={saveScenario} /> : null}
-          {nav === 'documents' ? <SourceCenter documents={data.documents} sources={data.sources} knowledgeBases={data.knowledgeBases} onUploadRequirement={uploadRequirement} onUploadApi={uploadApi} onImportApiUrl={importApiUrl} onCreateSource={createSource} onSyncSource={syncSource} onCreateKnowledgeBase={createKnowledgeBase} onUploadKnowledge={uploadKnowledge} onExtractKnowledge={extractKnowledge} /> : null}
+          {nav === 'documents' ? <SourceCenter documents={data.documents} sources={data.sources} knowledgeBases={data.knowledgeBases} onUploadRequirement={uploadRequirement} onUploadApi={uploadApi} onImportApiUrl={importApiUrl} onCreateSource={createSource} onSyncSource={syncSource} onDiscoverTapdMcp={discoverTapdMcp} onLoadTapdProjects={loadTapdProjects} onConnectTapdMcp={connectTapdMcp} onCreateKnowledgeBase={createKnowledgeBase} onUploadKnowledge={uploadKnowledge} onExtractKnowledge={extractKnowledge} /> : null}
           {nav === 'requirements' ? <RequirementsView requirements={data.requirements} onApprove={approveRequirement} onAnalyze={analyze} onGenerate={generateScenario} /> : null}
           {nav === 'api' ? <ApiView operations={data.operations} /> : null}
           {nav === 'scenarios' ? <ScenarioWorkspace scenarios={data.scenarios} activeScenario={activeScenario} selectedId={selectedScenarioId} onSelect={setSelectedScenarioId} running={running} runMode={runMode} onModeChange={setRunMode} onRun={runScenario} onApprove={approveScenario} onSave={saveScenario} onNavigate={setNav} /> : null}
