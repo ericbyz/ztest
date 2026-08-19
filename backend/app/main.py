@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import router
-from .database import Base, engine
+from .database import Base, engine, ensure_sqlite_schema
 
 
 @asynccontextmanager
@@ -15,6 +15,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Initialize an empty local database without injecting seeded business data."""
 
     Base.metadata.create_all(bind=engine)
+    ensure_sqlite_schema()
     yield
 
 

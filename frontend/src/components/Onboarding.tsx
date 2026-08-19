@@ -1,20 +1,20 @@
-import { ArrowRight, FileCode2, FolderPlus, GitFork, Plus, X } from 'lucide-react'
+import { ArrowRight, FileCode2, FolderPlus, GitFork, Plus, Settings, X } from 'lucide-react'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { EnvironmentItem, Project } from '../types'
 
-export function EmptyWorkspace({ onCreate }: { onCreate: () => void }) {
+export function EmptyWorkspace({ onCreate, onSettings }: { onCreate: () => void; onSettings: () => void }) {
   return (
     <main className="empty-workspace">
-      <div className="empty-brand"><span>AI</span><strong>AI Test Tool</strong></div>
+      <div className="empty-brand"><span>AI</span><strong>AI Test Tool</strong><button className="button secondary" onClick={onSettings} type="button"><Settings size={16} />系统设置</button></div>
       <section className="empty-hero">
         <div className="empty-visual"><GitFork size={42} /></div>
         <h1>从需求建立可执行的 API 测试链路</h1>
-        <p>创建第一个项目，然后导入需求文档与 OpenAPI。工作区不会预置任何业务数据或虚构接口。</p>
+        <p>创建第一个项目，然后从文件、TAPD、知识库与多种 API 文档建立测试上下文。工作区不会预置任何业务数据。</p>
         <button className="button primary large" onClick={onCreate} type="button"><FolderPlus size={18} /> 创建项目</button>
       </section>
       <div className="empty-steps">
-        <article><b>1</b><FileCode2 size={20} /><div><strong>导入真实资料</strong><p>需求文档与 OpenAPI 版本化保存</p></div></article>
+        <article><b>1</b><FileCode2 size={20} /><div><strong>接入真实资料</strong><p>文件、TAPD、知识库与 API 资产</p></div></article>
         <ArrowRight size={18} />
         <article><b>2</b><GitFork size={20} /><div><strong>审核映射与场景</strong><p>只引用项目内存在的 Operation</p></div></article>
         <ArrowRight size={18} />

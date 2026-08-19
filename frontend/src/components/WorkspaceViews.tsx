@@ -1,56 +1,14 @@
 import {
   AlertTriangle,
   ArrowRight,
-  CheckCircle2,
   Download,
-  FileCode2,
-  FileText,
   GitFork,
   ShieldCheck,
   Sparkles,
-  Upload,
 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { DocumentItem, OperationItem, RequirementItem, Run } from '../types'
-
-export function DocumentsView({ documents, onUpload }: {
-  documents: DocumentItem[]
-  onUpload: (kind: 'requirement' | 'openapi', file: File) => Promise<void>
-}) {
-  const [kind, setKind] = useState<'requirement' | 'openapi'>('requirement')
-  const fileRef = useRef<HTMLInputElement>(null)
-
-  return (
-    <div className="workspace-view">
-      <ViewHeader title="文档中心" description="管理需求与 API 规范版本，保留结构化解析证据。" action={(
-        <>
-          <select value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="requirement">需求文档</option><option value="openapi">OpenAPI</option></select>
-          <button className="button primary" onClick={() => fileRef.current?.click()} type="button"><Upload size={16} /> 上传文档</button>
-          <input hidden ref={fileRef} type="file" onChange={(event) => {
-            const file = event.target.files?.[0]
-            if (file) void onUpload(kind, file)
-          }} />
-        </>
-      )} />
-      <div className="content-list">
-        {documents.map((document) => (
-          <article className="list-card" key={document.id}>
-            <div className={`file-icon ${document.kind}`}>
-              {document.kind === 'openapi' ? <FileCode2 size={22} /> : <FileText size={22} />}
-            </div>
-            <div className="list-card-main">
-              <div className="list-title"><h3>{document.name}</h3><span>v{document.version}</span></div>
-              <p>校验和 {document.checksum.slice(0, 12)}… · {new Date(document.created_at).toLocaleDateString('zh-CN')}</p>
-              {document.issues.map((issue) => <div className="inline-warning" key={issue}><AlertTriangle size={13} /> {issue}</div>)}
-            </div>
-            <span className="status passed"><CheckCircle2 size={14} /> 已解析</span>
-          </article>
-        ))}
-      </div>
-    </div>
-  )
-}
+import type { OperationItem, RequirementItem, Run } from '../types'
 
 export function RequirementsView({ requirements, onApprove, onAnalyze, onGenerate }: {
   requirements: RequirementItem[]
@@ -70,7 +28,7 @@ export function RequirementsView({ requirements, onApprove, onAnalyze, onGenerat
       <ViewHeader title="需求中心" description="审核原子需求、业务规则、歧义和接口映射。" action={(
         <><button className="button secondary" onClick={() => void onAnalyze()} type="button"><Sparkles size={16} /> 分析与映射</button>{onGenerate ? <button className="button primary" disabled={selected.size === 0} onClick={() => void onGenerate([...selected])} type="button">生成场景（{selected.size}）</button> : null}</>
       )} />
-      {requirements.length === 0 ? <EmptyCollection title="尚无结构化需求" description="先在文档中心上传 Markdown、TXT 或 DOCX 需求文档。" /> : null}
+      {requirements.length === 0 ? <EmptyCollection title="尚无结构化需求" description="先在接入中心选择文件、TAPD 或知识库来源。" /> : null}
       <div className="requirements-layout">
         {requirements.map((item) => (
           <article className={`requirement-card ${selected.has(item.record_id) ? 'selected' : ''}`} key={item.record_id}>
@@ -102,9 +60,9 @@ export function ApiView({ operations }: { operations: OperationItem[] }) {
   return (
     <div className="workspace-view">
       <ViewHeader title="API 图谱" description="Operation 目录、就绪度和 Producer—Consumer 依赖。" />
-      {operations.length === 0 ? <EmptyCollection title="尚无 API Operation" description="在文档中心上传 OpenAPI 3.0/3.1 JSON 或 YAML。" /> : null}
+      {operations.length === 0 ? <EmptyCollection title="尚无 API Operation" description="在接入中心导入 OpenAPI、Swagger、Postman Collection 或 HAR。" /> : null}
       <section className="graph-surface">
-        <div className="graph-header"><GitFork size={18} /> 订单履约依赖链 <span>{operations.length} Operations</span></div>
+        <div className="graph-header"><GitFork size={18} /> API Operation 关系视图 <span>{operations.length} Operations</span></div>
         <div className="api-nodes">
           {operations.map((operation, index) => (
             <div className="api-node-wrap" key={operation.id}>

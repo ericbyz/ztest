@@ -2,11 +2,17 @@ import type {
   Dashboard,
   DocumentItem,
   EnvironmentItem,
+  KnowledgeBaseItem,
+  LlmConfiguration,
+  LlmConfigurationUpdate,
   OperationItem,
   Project,
   RequirementItem,
   Run,
   Scenario,
+  SourceConnector,
+  SourceConnectorCreate,
+  ApiSpecType,
 } from './types'
 
 class ApiError extends Error {
@@ -41,6 +47,36 @@ export const api = {
   scenarios: (projectId: string) => request<Scenario[]>(`/api/projects/${projectId}/scenarios`),
   environments: (projectId: string) =>
     request<EnvironmentItem[]>(`/api/projects/${projectId}/environments`),
+  sources: (projectId: string) =>
+    request<SourceConnector[]>(`/api/projects/${projectId}/sources`),
+  createSource: (projectId: string, payload: SourceConnectorCreate) =>
+    request<SourceConnector>(`/api/projects/${projectId}/sources`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  syncSource: (sourceId: string) =>
+    request<DocumentItem>(`/api/sources/${sourceId}:sync`, { method: 'POST' }),
+  knowledgeBases: (projectId: string) =>
+    request<KnowledgeBaseItem[]>(`/api/projects/${projectId}/knowledge-bases`),
+  createKnowledgeBase: (projectId: string, payload: { name: string; description: string }) =>
+    request<KnowledgeBaseItem>(`/api/projects/${projectId}/knowledge-bases`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  uploadKnowledgeDocument: async (knowledgeBaseId: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<DocumentItem>(`/api/knowledge-bases/${knowledgeBaseId}/documents`, {
+      method: 'POST', body: form,
+    })
+  },
+  extractKnowledgeRequirements: (knowledgeBaseId: string) =>
+    request<{ documents: number; requirements: number }>(
+      `/api/knowledge-bases/${knowledgeBaseId}:extract-requirements`,
+      { method: 'POST' },
+    ),
   createEnvironment: (projectId: string, payload: Omit<EnvironmentItem, 'id' | 'project_id' | 'created_at'>) =>
     request<EnvironmentItem>(`/api/projects/${projectId}/environments`, {
       method: 'POST',
@@ -73,12 +109,30 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
     }),
-  uploadDocument: async (projectId: string, kind: 'requirement' | 'openapi', file: File) => {
+  uploadDocument: async (projectId: string, kind: 'requirement' | 'api', file: File, specType: ApiSpecType = 'auto') => {
     const form = new FormData()
     form.append('file', file)
-    const path = kind === 'openapi' ? 'api-specs' : 'documents'
+    if (kind === 'api') form.append('spec_type', specType)
+    const path = kind === 'api' ? 'api-specs' : 'documents'
     return request<DocumentItem>(`/api/projects/${projectId}/${path}`, { method: 'POST', body: form })
   },
+  importApiUrl: (projectId: string, url: string, specType: ApiSpecType) =>
+    request<DocumentItem>(`/api/projects/${projectId}/api-specs:url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, spec_type: specType }),
+    }),
+  llmConfiguration: () => request<LlmConfiguration>('/api/settings/llm'),
+  updateLlmConfiguration: (payload: LlmConfigurationUpdate) =>
+    request<LlmConfiguration>('/api/settings/llm', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  testLlmConfiguration: () =>
+    request<{ ok: boolean; provider: string; model: string }>('/api/settings/llm:test', {
+      method: 'POST',
+    }),
   analyze: (projectId: string) =>
     request<{ requirements: number; operations: number }>(`/api/projects/${projectId}/analysis`, {
       method: 'POST',

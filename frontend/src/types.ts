@@ -5,6 +5,7 @@ export type NavKey =
   | 'api'
   | 'scenarios'
   | 'reports'
+  | 'settings'
 
 export interface Project {
   id: string
@@ -101,7 +102,70 @@ export interface DocumentItem {
   checksum: string
   status: string
   issues: string[]
+  source_type: string
+  source_uri: string
+  knowledge_base_id: string | null
+  size_bytes: number
   created_at: string
+}
+
+export type ApiSpecType = 'auto' | 'openapi' | 'swagger' | 'postman' | 'har'
+
+export interface SourceConnector {
+  id: string
+  project_id: string
+  name: string
+  source_type: 'tapd' | 'external_knowledge'
+  endpoint_url: string
+  workspace_id: string
+  auth_type: 'none' | 'bearer' | 'api_key' | 'basic'
+  auth_header: string
+  request_params: Record<string, string>
+  status: string
+  has_secret: boolean
+  last_sync_at: string | null
+  created_at: string
+}
+
+export interface SourceConnectorCreate {
+  name: string
+  source_type: 'tapd' | 'external_knowledge'
+  endpoint_url: string
+  workspace_id: string
+  auth_type: 'none' | 'bearer' | 'api_key' | 'basic'
+  auth_header: string
+  secret?: string
+  request_params: Record<string, string>
+}
+
+export interface KnowledgeBaseItem {
+  id: string
+  project_id: string
+  name: string
+  description: string
+  document_count: number
+  size_bytes: number
+  created_at: string
+}
+
+export interface LlmConfiguration {
+  provider: 'openai' | 'azure_openai' | 'anthropic' | 'openai_compatible'
+  model: string
+  base_url: string
+  enabled: boolean
+  has_api_key: boolean
+  api_key_masked: string
+  storage: 'local_only'
+  updated_at: string | null
+}
+
+export interface LlmConfigurationUpdate {
+  provider: LlmConfiguration['provider']
+  model: string
+  base_url: string
+  enabled: boolean
+  api_key?: string
+  clear_api_key?: boolean
 }
 
 export interface RequirementItem {

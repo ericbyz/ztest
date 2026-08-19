@@ -49,6 +49,12 @@ class Project(Base):
     environments: Mapped[list["Environment"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
+    source_connectors: Mapped[list["SourceConnector"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    knowledge_bases: Mapped[list["KnowledgeBase"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
 
 
 class Environment(Base):
@@ -85,9 +91,70 @@ class Document(Base):
     status: Mapped[str] = mapped_column(String(32), default="parsed")
     content: Mapped[str] = mapped_column(Text, default="")
     issues_json: Mapped[str] = mapped_column(Text, default="[]")
+    source_type: Mapped[str] = mapped_column(String(48), default="local_file")
+    source_uri: Mapped[str] = mapped_column(String(1000), default="")
+    knowledge_base_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_bases.id"), index=True
+    )
+    local_path: Mapped[str] = mapped_column(String(1000), default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     project: Mapped[Project] = relationship(back_populates="documents")
+    knowledge_base: Mapped["KnowledgeBase | None"] = relationship(back_populates="documents")
+
+
+class SourceConnector(Base):
+    """A requirement source whose credential lives in local-only storage."""
+
+    __tablename__ = "source_connectors"
+
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(48), nullable=False)
+    endpoint_url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(String(160), default="")
+    auth_type: Mapped[str] = mapped_column(String(32), default="bearer")
+    auth_header: Mapped[str] = mapped_column(String(120), default="Authorization")
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(32), default="configured")
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    project: Mapped[Project] = relationship(back_populates="source_connectors")
+
+
+class KnowledgeBase(Base):
+    """A project-scoped private file knowledge base."""
+
+    __tablename__ = "knowledge_bases"
+
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    project: Mapped[Project] = relationship(back_populates="knowledge_bases")
+    documents: Mapped[list[Document]] = relationship(
+        back_populates="knowledge_base", cascade="all, delete-orphan"
+    )
+
+
+class LlmConfiguration(Base):
+    """Global non-secret LLM settings; the API key stays in local storage."""
+
+    __tablename__ = "llm_configurations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
+    provider: Mapped[str] = mapped_column(String(48), default="openai")
+    model: Mapped[str] = mapped_column(String(160), default="")
+    base_url: Mapped[str] = mapped_column(String(1000), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
 
 
 class Requirement(Base):

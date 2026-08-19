@@ -8,10 +8,16 @@ import { CoverageRadar } from './components/CoverageRadar'
 import { Metrics } from './components/Metrics'
 import { EnvironmentModal, EmptyWorkspace, ProjectModal } from './components/Onboarding'
 import { RunsTable } from './components/RunsTable'
+import { SettingsView } from './components/SettingsView'
 import { Sidebar } from './components/Sidebar'
+import { SourceCenter } from './components/SourceCenter'
 import { WorkflowEditor } from './components/WorkflowEditor'
-import { ApiView, DocumentsView, ReportsView, RequirementsView } from './components/WorkspaceViews'
-import type { Dashboard, DocumentItem, EnvironmentItem, NavKey, OperationItem, Project, RequirementItem, Run, Scenario } from './types'
+import { ApiView, ReportsView, RequirementsView } from './components/WorkspaceViews'
+import type {
+  ApiSpecType, Dashboard, DocumentItem, EnvironmentItem, KnowledgeBaseItem,
+  LlmConfiguration, LlmConfigurationUpdate, NavKey, OperationItem, Project,
+  RequirementItem, Run, Scenario, SourceConnector, SourceConnectorCreate,
+} from './types'
 
 interface ProjectData {
   documents: DocumentItem[]
@@ -19,9 +25,18 @@ interface ProjectData {
   operations: OperationItem[]
   scenarios: Scenario[]
   environments: EnvironmentItem[]
+  sources: SourceConnector[]
+  knowledgeBases: KnowledgeBaseItem[]
 }
 
-const EMPTY_DATA: ProjectData = { documents: [], requirements: [], operations: [], scenarios: [], environments: [] }
+const EMPTY_DATA: ProjectData = {
+  documents: [], requirements: [], operations: [], scenarios: [], environments: [],
+  sources: [], knowledgeBases: [],
+}
+const EMPTY_LLM_CONFIGURATION: LlmConfiguration = {
+  provider: 'openai', model: '', base_url: '', enabled: false,
+  has_api_key: false, api_key_masked: '', storage: 'local_only', updated_at: null,
+}
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -29,6 +44,7 @@ export default function App() {
   const [nav, setNav] = useState<NavKey>('overview')
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
   const [data, setData] = useState<ProjectData>(EMPTY_DATA)
+  const [llmConfiguration, setLlmConfiguration] = useState<LlmConfiguration>(EMPTY_LLM_CONFIGURATION)
   const [selectedScenarioId, setSelectedScenarioId] = useState('')
   const [environmentId, setEnvironmentId] = useState('')
   const [runMode, setRunMode] = useState<'simulated' | 'live'>('simulated')
@@ -40,30 +56,32 @@ export default function App() {
   const [selectedRun, setSelectedRun] = useState<Run | null>(null)
   const [toast, setToast] = useState<string | null>(null)
 
-  const loadProject = useCallback(async (projectId: string) => {
-    setLoading(true)
+  const loadProject = useCallback(async (projectId: string, showLoading = true) => {
+    if (showLoading) setLoading(true)
     try {
-      const [dashboardResult, documents, requirements, operations, scenarios, environments] = await Promise.all([
+      const [dashboardResult, documents, requirements, operations, scenarios, environments, sources, knowledgeBases] = await Promise.all([
         api.dashboard(projectId), api.documents(projectId), api.requirements(projectId),
         api.operations(projectId), api.scenarios(projectId), api.environments(projectId),
+        api.sources(projectId), api.knowledgeBases(projectId),
       ])
       setActiveProjectId(projectId)
       setDashboard(dashboardResult)
-      setData({ documents, requirements, operations, scenarios, environments })
+      setData({ documents, requirements, operations, scenarios, environments, sources, knowledgeBases })
       setSelectedScenarioId((current) => scenarios.some((item) => item.id === current) ? current : scenarios[0]?.id ?? '')
       setEnvironmentId((current) => environments.some((item) => item.id === current) ? current : environments.find((item) => item.is_default)?.id ?? environments[0]?.id ?? '')
     } catch (error) {
       setToast(error instanceof Error ? error.message : '加载项目失败')
     } finally {
-      setLoading(false)
+      if (showLoading) setLoading(false)
     }
   }, [])
 
   const bootstrap = useCallback(async () => {
     setLoading(true)
     try {
-      const projectRows = await api.projects()
+      const [projectRows, llm] = await Promise.all([api.projects(), api.llmConfiguration()])
       setProjects(projectRows)
+      setLlmConfiguration(llm)
       if (projectRows.length > 0) await loadProject(projectRows[0].id)
       else setLoading(false)
     } catch (error) {
@@ -94,18 +112,99 @@ export default function App() {
     setProjects(await api.projects())
     setProjectModalOpen(false)
     await loadProject(project.id)
-    setToast('项目已创建。请导入需求文档和 OpenAPI。')
+    setToast('项目已创建。请在接入中心选择需求与 API 来源。')
   }
 
-  const refreshProject = async () => { if (activeProjectId) await loadProject(activeProjectId) }
+  const refreshProject = async () => { if (activeProjectId) await loadProject(activeProjectId, false) }
 
-  const upload = async (kind: 'requirement' | 'openapi', file: File) => {
+  const uploadRequirement = async (file: File) => {
     if (!activeProjectId) return
     try {
-      await api.uploadDocument(activeProjectId, kind, file)
+      await api.uploadDocument(activeProjectId, 'requirement', file)
       await refreshProject()
       setToast(`${file.name} 已完成版本化保存与解析`)
     } catch (error) { setToast(error instanceof Error ? error.message : '上传失败') }
+  }
+
+  const uploadApi = async (specType: ApiSpecType, file: File) => {
+    if (!activeProjectId) return
+    try {
+      const document = await api.uploadDocument(activeProjectId, 'api', file, specType)
+      await refreshProject()
+      setToast(`${file.name} 已识别为 ${document.kind}，并完成 Operation 归一化`)
+    } catch (error) { setToast(error instanceof Error ? error.message : 'API 文档上传失败') }
+  }
+
+  const importApiUrl = async (url: string, specType: ApiSpecType) => {
+    if (!activeProjectId) return
+    try {
+      const document = await api.importApiUrl(activeProjectId, url, specType)
+      await refreshProject()
+      setToast(`已从 HTTPS URL 导入 ${document.kind} 文档`)
+    } catch (error) { setToast(error instanceof Error ? error.message : 'URL 导入失败') }
+  }
+
+  const createSource = async (payload: SourceConnectorCreate) => {
+    if (!activeProjectId) return
+    try {
+      await api.createSource(activeProjectId, payload)
+      await refreshProject()
+      setToast('来源已保存；Secret 仅写入本机存储')
+    } catch (error) { setToast(error instanceof Error ? error.message : '来源保存失败') }
+  }
+
+  const syncSource = async (sourceId: string) => {
+    try {
+      const document = await api.syncSource(sourceId)
+      await refreshProject()
+      setToast(`${document.name} 已同步并解析`)
+    } catch (error) { setToast(error instanceof Error ? error.message : '来源同步失败') }
+  }
+
+  const createKnowledgeBase = async (payload: { name: string; description: string }) => {
+    if (!activeProjectId) return
+    try {
+      await api.createKnowledgeBase(activeProjectId, payload)
+      await refreshProject()
+      setToast('组件知识库已创建，本地私有目录已就绪')
+    } catch (error) { setToast(error instanceof Error ? error.message : '知识库创建失败') }
+  }
+
+  const uploadKnowledge = async (knowledgeBaseId: string, file: File) => {
+    try {
+      await api.uploadKnowledgeDocument(knowledgeBaseId, file)
+      await refreshProject()
+      setToast(`${file.name} 已保存到本机组件知识库`)
+    } catch (error) { setToast(error instanceof Error ? error.message : '知识文件上传失败') }
+  }
+
+  const extractKnowledge = async (knowledgeBaseId: string) => {
+    try {
+      const result = await api.extractKnowledgeRequirements(knowledgeBaseId)
+      await refreshProject()
+      setToast(`已从 ${result.documents} 个私有文件中提取 ${result.requirements} 条需求`)
+    } catch (error) { setToast(error instanceof Error ? error.message : '知识库解析失败') }
+  }
+
+  const saveLlmConfiguration = async (payload: LlmConfigurationUpdate) => {
+    try {
+      const updated = await api.updateLlmConfiguration(payload)
+      setLlmConfiguration(updated)
+      setToast('LLM 配置已保存；API Key 未写入数据库或 Git 工作区')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'LLM 配置保存失败')
+      throw error
+    }
+  }
+
+  const testLlmConfiguration = async () => {
+    try {
+      const result = await api.testLlmConfiguration()
+      setToast(`${result.provider} / ${result.model} 连接测试通过`)
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'LLM 连接测试失败')
+      throw error
+    }
   }
 
   const analyze = async () => {
@@ -177,7 +276,8 @@ export default function App() {
   }
 
   if (loading) return <div className="loading-screen"><div className="loading-mark">AI</div><p>正在加载测试工作区…</p></div>
-  if (!dashboard) return <><EmptyWorkspace onCreate={() => setProjectModalOpen(true)} />{projectModalOpen ? <ProjectModal onClose={() => setProjectModalOpen(false)} onCreate={createProject} /> : null}{toast ? <Toast message={toast} /> : null}</>
+  if (!dashboard && nav === 'settings') return <main className="standalone-settings"><button className="button secondary" onClick={() => setNav('overview')} type="button">返回首页</button><SettingsView key={llmConfiguration.updated_at ?? 'empty'} configuration={llmConfiguration} onSave={saveLlmConfiguration} onTest={testLlmConfiguration} />{toast ? <Toast message={toast} /> : null}</main>
+  if (!dashboard) return <><EmptyWorkspace onCreate={() => setProjectModalOpen(true)} onSettings={() => setNav('settings')} />{projectModalOpen ? <ProjectModal onClose={() => setProjectModalOpen(false)} onCreate={createProject} /> : null}{toast ? <Toast message={toast} /> : null}</>
 
   return (
     <div className="app-shell">
@@ -200,11 +300,12 @@ export default function App() {
         </header>
         <main className="page-content">
           {nav === 'overview' ? <Overview dashboard={dashboard} data={data} onNavigate={setNav} onSelectRun={setSelectedRun} activeScenario={activeScenario} running={running} runMode={runMode} onModeChange={setRunMode} onRun={runScenario} onApprove={approveScenario} onSave={saveScenario} /> : null}
-          {nav === 'documents' ? <DocumentsView documents={data.documents} onUpload={upload} /> : null}
+          {nav === 'documents' ? <SourceCenter documents={data.documents} sources={data.sources} knowledgeBases={data.knowledgeBases} onUploadRequirement={uploadRequirement} onUploadApi={uploadApi} onImportApiUrl={importApiUrl} onCreateSource={createSource} onSyncSource={syncSource} onCreateKnowledgeBase={createKnowledgeBase} onUploadKnowledge={uploadKnowledge} onExtractKnowledge={extractKnowledge} /> : null}
           {nav === 'requirements' ? <RequirementsView requirements={data.requirements} onApprove={approveRequirement} onAnalyze={analyze} onGenerate={generateScenario} /> : null}
           {nav === 'api' ? <ApiView operations={data.operations} /> : null}
           {nav === 'scenarios' ? <ScenarioWorkspace scenarios={data.scenarios} activeScenario={activeScenario} selectedId={selectedScenarioId} onSelect={setSelectedScenarioId} running={running} runMode={runMode} onModeChange={setRunMode} onRun={runScenario} onApprove={approveScenario} onSave={saveScenario} onNavigate={setNav} /> : null}
           {nav === 'reports' ? <ReportsView runs={dashboard.recent_runs} projectId={dashboard.project.id} onSelect={setSelectedRun} /> : null}
+          {nav === 'settings' ? <SettingsView key={llmConfiguration.updated_at ?? 'empty'} configuration={llmConfiguration} onSave={saveLlmConfiguration} onTest={testLlmConfiguration} /> : null}
         </main>
       </div>
       {selectedRun ? <RunDrawer run={selectedRun} onClose={() => setSelectedRun(null)} /> : null}
@@ -240,7 +341,7 @@ function Overview({ dashboard, data, onNavigate, onSelectRun, activeScenario, ru
 }
 
 function GettingStarted({ onNavigate }: { onNavigate: (key: NavKey) => void }) {
-  return <section className="getting-started"><header><div><h2>建立第一个测试闭环</h2><p>当前项目是空白工作区，不包含任何演示业务或虚构接口。</p></div><span>0 / 3</span></header><div className="setup-actions"><button onClick={() => onNavigate('documents')} type="button"><FileText size={22} /><div><strong>1. 上传需求文档</strong><p>支持 Markdown、TXT、DOCX</p></div><Plus size={16} /></button><button onClick={() => onNavigate('documents')} type="button"><FileCode2 size={22} /><div><strong>2. 导入 OpenAPI</strong><p>支持 3.0 / 3.1 JSON、YAML</p></div><Plus size={16} /></button><button onClick={() => onNavigate('requirements')} type="button"><GitFork size={22} /><div><strong>3. 分析并生成场景</strong><p>审核映射、断言和清理计划</p></div><Plus size={16} /></button></div></section>
+  return <section className="getting-started"><header><div><h2>建立第一个测试闭环</h2><p>当前项目是空白工作区，不包含任何演示业务或虚构接口。</p></div><span>0 / 3</span></header><div className="setup-actions"><button onClick={() => onNavigate('documents')} type="button"><FileText size={22} /><div><strong>1. 选择需求来源</strong><p>文件、TAPD、外部或组件知识库</p></div><Plus size={16} /></button><button onClick={() => onNavigate('documents')} type="button"><FileCode2 size={22} /><div><strong>2. 导入 API 资产</strong><p>OpenAPI、Swagger、Postman、HAR</p></div><Plus size={16} /></button><button onClick={() => onNavigate('requirements')} type="button"><GitFork size={22} /><div><strong>3. 分析并生成场景</strong><p>审核映射、断言和清理计划</p></div><Plus size={16} /></button></div></section>
 }
 
 interface ScenarioWorkspaceProps {

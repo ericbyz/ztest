@@ -3,6 +3,7 @@ services:
     build: ./backend
     environment:
       AI_TEST_DATABASE_PATH: /data/ai_test_tool.db
+      AI_TEST_LOCAL_DATA_PATH: /data/local
     ports:
       - "8000:8000"
     volumes:

@@ -7,4 +7,8 @@ frontend/node_modules/
 frontend/dist/
 coverage/
 .env
-
+backend/.local/
+.local/
+local-data/
+*.secret.json
+*.secrets.json

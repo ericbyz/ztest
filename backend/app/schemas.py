@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, SecretStr
 
 
 class ProjectCreate(BaseModel):
@@ -64,13 +64,103 @@ class DocumentView(BaseModel):
     checksum: str
     status: str
     issues: list[str]
+    source_type: str
+    source_uri: str
+    knowledge_base_id: str | None
+    size_bytes: int
     created_at: datetime
 
 
-class OpenApiUrlImport(BaseModel):
-    """OpenAPI URL import payload."""
+ApiSpecType = Literal["auto", "openapi", "swagger", "postman", "har"]
+
+
+class ApiSpecUrlImport(BaseModel):
+    """API specification URL import payload."""
 
     url: HttpUrl
+    spec_type: ApiSpecType = "auto"
+
+
+class SourceConnectorCreate(BaseModel):
+    """TAPD or external knowledge source with a write-only credential."""
+
+    name: str = Field(min_length=2, max_length=160)
+    source_type: Literal["tapd", "external_knowledge"]
+    endpoint_url: HttpUrl
+    workspace_id: str = Field(default="", max_length=160)
+    auth_type: Literal["none", "bearer", "api_key", "basic"] = "bearer"
+    auth_header: str = Field(default="Authorization", max_length=120)
+    secret: SecretStr | None = None
+    request_params: dict[str, str] = Field(default_factory=dict)
+
+
+class SourceConnectorView(BaseModel):
+    """Connector metadata that never serializes its credential."""
+
+    id: str
+    project_id: str
+    name: str
+    source_type: str
+    endpoint_url: str
+    workspace_id: str
+    auth_type: str
+    auth_header: str
+    request_params: dict[str, str]
+    status: str
+    has_secret: bool
+    last_sync_at: datetime | None
+    created_at: datetime
+
+
+class KnowledgeBaseCreate(BaseModel):
+    """Create a project-scoped private file knowledge base."""
+
+    name: str = Field(min_length=2, max_length=160)
+    description: str = Field(default="", max_length=2000)
+
+
+class KnowledgeBaseView(KnowledgeBaseCreate):
+    """Knowledge base summary without private file contents."""
+
+    id: str
+    project_id: str
+    document_count: int
+    size_bytes: int
+    created_at: datetime
+
+
+class KnowledgeSearchResult(BaseModel):
+    """A local lexical knowledge match."""
+
+    document_id: str
+    document_name: str
+    source: str
+    snippet: str
+    score: int
+
+
+class LlmConfigurationUpdate(BaseModel):
+    """Global LLM settings with a write-only API key."""
+
+    provider: Literal["openai", "azure_openai", "anthropic", "openai_compatible"]
+    model: str = Field(min_length=1, max_length=160)
+    base_url: str = Field(default="", max_length=1000)
+    enabled: bool = True
+    api_key: SecretStr | None = None
+    clear_api_key: bool = False
+
+
+class LlmConfigurationView(BaseModel):
+    """LLM settings response with a masked credential status only."""
+
+    provider: str
+    model: str
+    base_url: str
+    enabled: bool
+    has_api_key: bool
+    api_key_masked: str
+    storage: Literal["local_only"] = "local_only"
+    updated_at: datetime | None
 
 
 class RequirementView(BaseModel):

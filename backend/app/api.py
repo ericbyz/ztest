@@ -3,24 +3,51 @@
 from __future__ import annotations
 
 import os
+from base64 import b64encode
 from io import BytesIO
 from typing import Annotated, Any
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .database import get_session
-from .models import ApiOperation, Document, Environment, Project, Requirement, Scenario, TestRun, new_id
+from .local_store import (
+    delete_secret,
+    get_secret,
+    has_secret,
+    mask_secret,
+    set_secret,
+    store_knowledge_file,
+)
+from .models import (
+    ApiOperation,
+    Document,
+    Environment,
+    KnowledgeBase,
+    LlmConfiguration,
+    Project,
+    Requirement,
+    Scenario,
+    SourceConnector,
+    TestRun,
+    new_id,
+    utc_now,
+)
 from .schemas import (
+    ApiSpecUrlImport,
     DashboardView,
     DocumentView,
     EnvironmentCreate,
     EnvironmentView,
-    OpenApiUrlImport,
+    KnowledgeBaseCreate,
+    KnowledgeBaseView,
+    KnowledgeSearchResult,
+    LlmConfigurationUpdate,
+    LlmConfigurationView,
     OperationView,
     ProjectCreate,
     ProjectUpdate,
@@ -32,6 +59,8 @@ from .schemas import (
     ScenarioGenerate,
     ScenarioUpdate,
     ScenarioView,
+    SourceConnectorCreate,
+    SourceConnectorView,
 )
 from .security import UnsafeTargetError, validate_target
 from .services import (
@@ -40,14 +69,17 @@ from .services import (
     dumps,
     execute_scenario,
     export_pytest,
+    external_payload_to_text,
     extract_text,
     finished_now,
     loads,
     map_requirements,
     normalize_operations,
+    parse_api_document,
     parse_openapi,
     parse_requirements,
     run_to_dict,
+    search_knowledge_documents,
     validate_ir,
 )
 
@@ -78,6 +110,10 @@ def _document_view(document: Document) -> DocumentView:
         checksum=document.checksum,
         status=document.status,
         issues=loads(document.issues_json, []),
+        source_type=document.source_type,
+        source_uri=document.source_uri,
+        knowledge_base_id=document.knowledge_base_id,
+        size_bytes=document.size_bytes,
         created_at=document.created_at,
     )
 
@@ -150,6 +186,70 @@ def _environment_view(environment: Environment) -> EnvironmentView:
         is_default=environment.is_default,
         created_at=environment.created_at,
     )
+
+
+def _source_secret_id(source_id: str) -> str:
+    """Return the opaque local-vault key for one connector."""
+
+    return f"source:{source_id}"
+
+
+def _source_view(source: SourceConnector) -> SourceConnectorView:
+    """Serialize connector metadata without its local credential."""
+
+    return SourceConnectorView(
+        id=source.id,
+        project_id=source.project_id,
+        name=source.name,
+        source_type=source.source_type,
+        endpoint_url=source.endpoint_url,
+        workspace_id=source.workspace_id,
+        auth_type=source.auth_type,
+        auth_header=source.auth_header,
+        request_params=loads(source.config_json, {}),
+        status=source.status,
+        has_secret=has_secret(_source_secret_id(source.id)),
+        last_sync_at=source.last_sync_at,
+        created_at=source.created_at,
+    )
+
+
+def _knowledge_base_view(session: Session, knowledge_base: KnowledgeBase) -> KnowledgeBaseView:
+    """Build a knowledge summary without loading private contents into the response."""
+
+    document_count, size_bytes = session.execute(
+        select(func.count(Document.id), func.coalesce(func.sum(Document.size_bytes), 0)).where(
+            Document.knowledge_base_id == knowledge_base.id
+        )
+    ).one()
+    return KnowledgeBaseView(
+        id=knowledge_base.id,
+        project_id=knowledge_base.project_id,
+        name=knowledge_base.name,
+        description=knowledge_base.description,
+        document_count=int(document_count),
+        size_bytes=int(size_bytes),
+        created_at=knowledge_base.created_at,
+    )
+
+
+LLM_SECRET_ID = "llm:default:api_key"
+
+
+def _llm_view(config: LlmConfiguration | None) -> LlmConfigurationView:
+    """Return global model settings and only a masked key indicator."""
+
+    return LlmConfigurationView(
+        provider=config.provider if config else "openai",
+        model=config.model if config else "",
+        base_url=config.base_url if config else "",
+        enabled=config.enabled if config else False,
+        has_api_key=has_secret(LLM_SECRET_ID),
+        api_key_masked=mask_secret(LLM_SECRET_ID),
+        updated_at=config.updated_at if config else None,
+    )
+
+
 @router.get("/health")
 def health() -> dict[str, str]:
     """Return service readiness."""
@@ -246,6 +346,335 @@ def create_environment(
     session.add(environment)
     session.commit()
     return _environment_view(environment)
+
+
+@router.get(
+    "/projects/{project_id}/sources",
+    response_model=list[SourceConnectorView],
+)
+def list_sources(project_id: str, session: SessionDep) -> list[SourceConnectorView]:
+    """List configured TAPD and external knowledge connectors."""
+
+    _project_or_404(session, project_id)
+    rows = session.scalars(
+        select(SourceConnector)
+        .where(SourceConnector.project_id == project_id)
+        .order_by(SourceConnector.created_at.desc())
+    ).all()
+    return [_source_view(row) for row in rows]
+
+
+@router.post(
+    "/projects/{project_id}/sources",
+    response_model=SourceConnectorView,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_source(
+    project_id: str,
+    payload: SourceConnectorCreate,
+    session: SessionDep,
+) -> SourceConnectorView:
+    """Create a connector and write its credential to ignored local storage."""
+
+    _project_or_404(session, project_id)
+    sensitive_names = {"token", "key", "secret", "password", "authorization"}
+    if any(any(marker in key.lower() for marker in sensitive_names) for key in payload.request_params):
+        raise HTTPException(status_code=422, detail="敏感参数必须填写在 Secret 字段，不能写入请求参数")
+    source = SourceConnector(
+        id=new_id("src"),
+        project_id=project_id,
+        name=payload.name,
+        source_type=payload.source_type,
+        endpoint_url=str(payload.endpoint_url),
+        workspace_id=payload.workspace_id,
+        auth_type=payload.auth_type,
+        auth_header=payload.auth_header,
+        config_json=dumps(payload.request_params),
+    )
+    session.add(source)
+    if payload.secret:
+        try:
+            set_secret(_source_secret_id(source.id), payload.secret.get_secret_value())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    session.commit()
+    return _source_view(source)
+
+
+@router.post("/sources/{source_id}:sync", response_model=DocumentView)
+def sync_source(source_id: str, session: SessionDep) -> DocumentView:
+    """Fetch a configured source, atomize it, and persist traceable provenance."""
+
+    source = session.get(SourceConnector, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="来源连接器不存在")
+    host = urlparse(source.endpoint_url).hostname
+    try:
+        validate_target(source.endpoint_url, [host] if host else [])
+    except UnsafeTargetError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    secret = get_secret(_source_secret_id(source.id))
+    if source.auth_type != "none" and not secret:
+        raise HTTPException(status_code=409, detail="该来源尚未配置本地 Secret")
+    headers: dict[str, str] = {"Accept": "application/json, text/plain"}
+    if source.auth_type == "bearer" and secret:
+        headers[source.auth_header] = f"Bearer {secret}"
+    elif source.auth_type == "api_key" and secret:
+        headers[source.auth_header] = secret
+    elif source.auth_type == "basic" and secret:
+        encoded = b64encode(secret.encode("utf-8")).decode("ascii")
+        headers[source.auth_header] = f"Basic {encoded}"
+
+    params = loads(source.config_json, {})
+    if source.workspace_id and "workspace_id" not in params:
+        params["workspace_id"] = source.workspace_id
+    try:
+        response = httpx.get(
+            source.endpoint_url,
+            headers=headers,
+            params=params,
+            timeout=20.0,
+            follow_redirects=False,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        source.status = "error"
+        session.commit()
+        raise HTTPException(status_code=422, detail=f"来源同步失败：{exc}") from exc
+
+    try:
+        payload: Any = response.json()
+    except ValueError:
+        payload = response.text
+    text = external_payload_to_text(payload)
+    document_name = f"{source.name}-{utc_now().strftime('%Y%m%d-%H%M%S')}.txt"
+    requirements = parse_requirements(source.project_id, document_name, text)
+    for requirement in requirements:
+        requirement.source = f"{source.source_type}://{source.id}/{requirement.source}"
+    document = Document(
+        id=new_id("doc"),
+        project_id=source.project_id,
+        name=document_name,
+        kind="requirement",
+        version=1,
+        checksum=checksum(response.content),
+        content=text,
+        issues_json=dumps([] if requirements else ["同步成功，但未识别出可测试需求"]),
+        source_type=source.source_type,
+        source_uri=source.endpoint_url,
+        size_bytes=len(response.content),
+    )
+    source.status = "synced"
+    source.last_sync_at = utc_now()
+    session.add(document)
+    session.add_all(requirements)
+    session.commit()
+    return _document_view(document)
+
+
+@router.get(
+    "/projects/{project_id}/knowledge-bases",
+    response_model=list[KnowledgeBaseView],
+)
+def list_knowledge_bases(project_id: str, session: SessionDep) -> list[KnowledgeBaseView]:
+    """List project-private component knowledge bases."""
+
+    _project_or_404(session, project_id)
+    rows = session.scalars(
+        select(KnowledgeBase)
+        .where(KnowledgeBase.project_id == project_id)
+        .order_by(KnowledgeBase.created_at.desc())
+    ).all()
+    return [_knowledge_base_view(session, row) for row in rows]
+
+
+@router.post(
+    "/projects/{project_id}/knowledge-bases",
+    response_model=KnowledgeBaseView,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_knowledge_base(
+    project_id: str,
+    payload: KnowledgeBaseCreate,
+    session: SessionDep,
+) -> KnowledgeBaseView:
+    """Create an isolated local file knowledge base."""
+
+    _project_or_404(session, project_id)
+    knowledge_base = KnowledgeBase(
+        id=new_id("kb"),
+        project_id=project_id,
+        name=payload.name,
+        description=payload.description,
+    )
+    session.add(knowledge_base)
+    session.commit()
+    return _knowledge_base_view(session, knowledge_base)
+
+
+@router.post("/knowledge-bases/{knowledge_base_id}/documents", response_model=DocumentView)
+async def upload_knowledge_document(
+    knowledge_base_id: str,
+    session: SessionDep,
+    file: UploadFile = File(...),
+) -> DocumentView:
+    """Store a component knowledge file outside the Git working tree."""
+
+    knowledge_base = session.get(KnowledgeBase, knowledge_base_id)
+    if not knowledge_base:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="知识文件超过 20 MB 默认上限")
+    filename = file.filename or "knowledge.txt"
+    try:
+        text = extract_text(filename, content)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    document_id = new_id("kbdoc")
+    local_path = store_knowledge_file(
+        knowledge_base.project_id,
+        knowledge_base.id,
+        document_id,
+        filename,
+        content,
+    )
+    document = Document(
+        id=document_id,
+        project_id=knowledge_base.project_id,
+        name=filename,
+        kind="knowledge",
+        version=1,
+        checksum=checksum(content),
+        content=text,
+        source_type="component_knowledge",
+        source_uri=f"knowledge://{knowledge_base.id}/{filename}",
+        knowledge_base_id=knowledge_base.id,
+        local_path=local_path,
+        size_bytes=len(content),
+    )
+    session.add(document)
+    session.commit()
+    return _document_view(document)
+
+
+@router.post("/knowledge-bases/{knowledge_base_id}:extract-requirements")
+def extract_knowledge_requirements(
+    knowledge_base_id: str,
+    session: SessionDep,
+) -> dict[str, int]:
+    """Promote selected private knowledge content into traceable requirements."""
+
+    knowledge_base = session.get(KnowledgeBase, knowledge_base_id)
+    if not knowledge_base:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    documents = list(
+        session.scalars(
+            select(Document).where(Document.knowledge_base_id == knowledge_base_id)
+        ).all()
+    )
+    if not documents:
+        raise HTTPException(status_code=409, detail="请先上传知识文件")
+    requirements: list[Requirement] = []
+    for document in documents:
+        parsed = parse_requirements(knowledge_base.project_id, document.name, document.content)
+        for requirement in parsed:
+            requirement.source = f"knowledge://{knowledge_base.id}/{requirement.source}"
+        requirements.extend(parsed)
+    session.add_all(requirements)
+    session.commit()
+    return {"documents": len(documents), "requirements": len(requirements)}
+
+
+@router.get(
+    "/knowledge-bases/{knowledge_base_id}/search",
+    response_model=list[KnowledgeSearchResult],
+)
+def search_knowledge_base(
+    knowledge_base_id: str,
+    q: str,
+    session: SessionDep,
+) -> list[dict[str, Any]]:
+    """Search only local parsed content for one component knowledge base."""
+
+    if not session.get(KnowledgeBase, knowledge_base_id):
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    if not q.strip():
+        raise HTTPException(status_code=422, detail="搜索词不能为空")
+    documents = list(
+        session.scalars(select(Document).where(Document.knowledge_base_id == knowledge_base_id)).all()
+    )
+    return search_knowledge_documents(documents, q)
+
+
+@router.get("/settings/llm", response_model=LlmConfigurationView)
+def get_llm_configuration(session: SessionDep) -> LlmConfigurationView:
+    """Return global LLM configuration without exposing the API key."""
+
+    return _llm_view(session.get(LlmConfiguration, "default"))
+
+
+@router.put("/settings/llm", response_model=LlmConfigurationView)
+def update_llm_configuration(
+    payload: LlmConfigurationUpdate,
+    session: SessionDep,
+) -> LlmConfigurationView:
+    """Save model settings and keep the write-only API key in local storage."""
+
+    config = session.get(LlmConfiguration, "default")
+    if not config:
+        config = LlmConfiguration(id="default")
+        session.add(config)
+    config.provider = payload.provider
+    config.model = payload.model
+    config.base_url = payload.base_url.rstrip("/")
+    config.enabled = payload.enabled
+    if payload.clear_api_key:
+        delete_secret(LLM_SECRET_ID)
+    if payload.api_key:
+        try:
+            set_secret(LLM_SECRET_ID, payload.api_key.get_secret_value())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    session.commit()
+    return _llm_view(config)
+
+
+@router.post("/settings/llm:test")
+def test_llm_configuration(session: SessionDep) -> dict[str, Any]:
+    """Verify the stored credential against a provider's model endpoint."""
+
+    config = session.get(LlmConfiguration, "default")
+    secret = get_secret(LLM_SECRET_ID)
+    if not config or not config.enabled or not secret:
+        raise HTTPException(status_code=409, detail="请先启用 LLM 并保存 API Key")
+    defaults = {
+        "openai": "https://api.openai.com/v1",
+        "anthropic": "https://api.anthropic.com/v1",
+    }
+    base_url = config.base_url or defaults.get(config.provider, "")
+    if not base_url:
+        raise HTTPException(status_code=422, detail="当前 Provider 必须配置 Base URL")
+    host = urlparse(base_url).hostname
+    try:
+        safe_base_url = validate_target(base_url, [host] if host else [])
+    except UnsafeTargetError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    headers = {"Authorization": f"Bearer {secret}"}
+    if config.provider == "anthropic":
+        headers = {"x-api-key": secret, "anthropic-version": "2023-06-01"}
+    try:
+        response = httpx.get(
+            f"{safe_base_url}/models",
+            headers=headers,
+            timeout=15.0,
+            follow_redirects=False,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=422, detail=f"LLM 连接测试失败：{exc}") from exc
+    return {"ok": True, "provider": config.provider, "model": config.model}
 
 
 @router.get("/projects/{project_id}/dashboard", response_model=DashboardView)
@@ -425,6 +854,8 @@ async def upload_requirement_document(
         checksum=checksum(content),
         content=text,
         issues_json=dumps([] if requirements else ["未识别出可测试需求"]),
+        source_type="local_file",
+        size_bytes=len(content),
     )
     session.add(document)
     session.add_all(requirements)
@@ -437,35 +868,45 @@ async def upload_openapi(
     project_id: str,
     session: SessionDep,
     file: UploadFile = File(...),
+    spec_type: str = Form("auto"),
 ) -> DocumentView:
-    """Upload and normalize an OpenAPI 3.0/3.1 specification."""
+    """Upload OpenAPI, Swagger, Postman, or HAR and normalize operations."""
 
     _project_or_404(session, project_id)
     content = await file.read()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="API 文档超过 20 MB 默认上限")
     try:
-        spec = parse_openapi(content)
-        operations = normalize_operations(project_id, spec)
+        detected_type, operations = parse_api_document(
+            project_id,
+            file.filename or "api-spec.json",
+            content,
+            spec_type,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     version = (
         session.scalar(
             select(func.max(Document.version)).where(
                 Document.project_id == project_id,
-                Document.name == (file.filename or "openapi.yaml"),
+                Document.name == (file.filename or "api-spec.json"),
             )
         )
         or 0
     ) + 1
-    issues = [f"{sum(item.readiness < 80 for item in operations)} 个 Operation 就绪度低于 80"]
+    low_readiness = sum(item.readiness < 80 for item in operations)
+    issues = [f"{low_readiness} 个 Operation 就绪度低于 80"] if low_readiness else []
     document = Document(
         id=new_id("spec"),
         project_id=project_id,
-        name=file.filename or "openapi.yaml",
-        kind="openapi",
+        name=file.filename or "api-spec.json",
+        kind=detected_type,
         version=version,
         checksum=checksum(content),
         content=content.decode("utf-8-sig"),
         issues_json=dumps(issues),
+        source_type="local_file",
+        size_bytes=len(content),
     )
     session.add(document)
     existing_ids = set(
@@ -481,10 +922,10 @@ async def upload_openapi(
 @router.post("/projects/{project_id}/api-specs:url", response_model=DocumentView)
 async def import_openapi_url(
     project_id: str,
-    payload: OpenApiUrlImport,
+    payload: ApiSpecUrlImport,
     session: SessionDep,
 ) -> DocumentView:
-    """Import OpenAPI from a public HTTPS URL."""
+    """Import a supported API document from a public HTTPS URL."""
 
     if payload.url.scheme != "https":
         raise HTTPException(status_code=422, detail="URL 导入仅允许 HTTPS")
@@ -499,7 +940,14 @@ async def import_openapi_url(
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=422, detail=f"URL 导入失败：{exc}") from exc
     upload = UploadFile(filename=str(payload.url).rsplit("/", maxsplit=1)[-1], file=BytesIO(response.content))
-    return await upload_openapi(project_id, session, upload)
+    view = await upload_openapi(project_id, session, upload, payload.spec_type)
+    document = session.get(Document, view.id)
+    if document:
+        document.source_type = "api_url"
+        document.source_uri = str(payload.url)
+        session.commit()
+        return _document_view(document)
+    return view
 
 
 @router.post("/projects/{project_id}/analysis")

@@ -32,7 +32,7 @@ export function Metrics({ values }: MetricsProps) {
                   <span style={{ width: `${value}%` }} />
                 </div>
               ) : (
-                <div className="metric-hint">较昨日 +2</div>
+                <div className="metric-hint">实时待处理数量</div>
               )}
             </div>
           </article>
@@ -41,4 +41,3 @@ export function Metrics({ values }: MetricsProps) {
     </section>
   )
 }
-

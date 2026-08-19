@@ -13,6 +13,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import yaml
@@ -162,8 +163,69 @@ def parse_openapi(content: bytes) -> JsonObject:
     return raw
 
 
+def parse_api_document(
+    project_id: str,
+    filename: str,
+    content: bytes,
+    spec_type: str = "auto",
+) -> tuple[str, list[ApiOperation]]:
+    """Detect and normalize a supported API document.
+
+    Supported inputs are OpenAPI 3.x, Swagger 2.0, Postman Collection 2.x,
+    and HAR 1.2. The returned kind is persisted as document provenance.
+    """
+
+    raw = _load_structured_document(content)
+    detected = _detect_api_spec_type(raw) if spec_type == "auto" else spec_type
+    if detected == "openapi":
+        if not str(raw.get("openapi", "")).startswith("3."):
+            raise ValueError("文件不是 OpenAPI 3.x 文档")
+        return detected, normalize_operations(project_id, raw)
+    if detected == "swagger":
+        if str(raw.get("swagger", "")) != "2.0":
+            raise ValueError("文件不是 Swagger 2.0 文档")
+        return detected, normalize_operations(project_id, raw)
+    if detected == "postman":
+        return detected, normalize_postman(project_id, raw, filename)
+    if detected == "har":
+        return detected, normalize_har(project_id, raw, filename)
+    raise ValueError("无法识别 API 文档类型")
+
+
+def _load_structured_document(content: bytes) -> JsonObject:
+    """Decode a JSON or YAML mapping with actionable parse errors."""
+
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("API 文档必须使用 UTF-8 编码") from exc
+    try:
+        raw = json.loads(text) if text.lstrip().startswith(("{", "[")) else yaml.safe_load(text)
+    except (json.JSONDecodeError, yaml.YAMLError) as exc:
+        raise ValueError(f"API 文档解析失败：{exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("API 文档根节点必须是对象")
+    return raw
+
+
+def _detect_api_spec_type(raw: JsonObject) -> str:
+    """Identify a common API document without relying on its filename."""
+
+    if str(raw.get("openapi", "")).startswith("3."):
+        return "openapi"
+    if str(raw.get("swagger", "")) == "2.0":
+        return "swagger"
+    if isinstance(raw.get("log"), dict) and isinstance(raw["log"].get("entries"), list):
+        return "har"
+    info = raw.get("info")
+    schema = info.get("schema", "") if isinstance(info, dict) else ""
+    if "schema.getpostman.com" in str(schema) or isinstance(raw.get("item"), list):
+        return "postman"
+    raise ValueError("支持 OpenAPI 3.x、Swagger 2.0、Postman Collection 2.x 和 HAR 1.2")
+
+
 def normalize_operations(project_id: str, spec: JsonObject) -> list[ApiOperation]:
-    """Normalize OpenAPI paths into independently searchable operations."""
+    """Normalize OpenAPI or Swagger paths into searchable operations."""
 
     operations: list[ApiOperation] = []
     security_default = bool(spec.get("security"))
@@ -218,6 +280,11 @@ def _request_schema(operation: JsonObject, path_parameters: list[Any]) -> JsonOb
         .get("application/json", {})
         .get("schema", {})
     )
+    if not body:
+        for parameter in parameters:
+            if isinstance(parameter, dict) and parameter.get("in") == "body":
+                body = parameter.get("schema", {})
+                break
     return {"parameters": parameters, "body": body}
 
 
@@ -228,13 +295,204 @@ def _response_schema(operation: JsonObject) -> JsonObject:
     for status in ("200", "201", "202", "204", "default"):
         response = responses.get(status)
         if response:
+            content_schema = response.get("content", {}).get("application/json", {}).get("schema", {})
             return {
                 "status": status,
-                "schema": response.get("content", {})
-                .get("application/json", {})
-                .get("schema", {}),
+                "schema": content_schema or response.get("schema", {}),
             }
     return {}
+
+
+def normalize_postman(
+    project_id: str,
+    collection: JsonObject,
+    filename: str,
+) -> list[ApiOperation]:
+    """Flatten a Postman collection into normalized operations."""
+
+    operations: list[ApiOperation] = []
+
+    def visit(items: list[Any], folders: list[str]) -> None:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            nested = item.get("item")
+            if isinstance(nested, list):
+                visit(nested, [*folders, str(item.get("name", "分组"))])
+                continue
+            request = item.get("request")
+            if not isinstance(request, dict):
+                continue
+            method = str(request.get("method", "GET")).upper()
+            path = _postman_path(request.get("url"))
+            name = str(item.get("name") or stable_operation_id(method, path))
+            body = request.get("body") if isinstance(request.get("body"), dict) else {}
+            operations.append(
+                ApiOperation(
+                    id=new_id("op"),
+                    operation_id=_unique_operation_id(operations, name, method, path),
+                    project_id=project_id,
+                    method=method,
+                    path=path,
+                    summary=name[:500],
+                    tags_json=dumps(folders or [Path(filename).stem]),
+                    request_schema_json=dumps({"parameters": [], "body": body}),
+                    response_schema_json=dumps({}),
+                    auth_required=bool(request.get("auth") or collection.get("auth")),
+                    readiness=70 if path != "/" else 55,
+                )
+            )
+
+    visit(collection.get("item", []), [])
+    if not operations:
+        raise ValueError("Postman Collection 中没有可用请求")
+    return operations
+
+
+def _postman_path(value: Any) -> str:
+    """Extract a stable path template from Postman's URL variants."""
+
+    raw = ""
+    if isinstance(value, str):
+        raw = value
+    elif isinstance(value, dict):
+        raw = str(value.get("raw", ""))
+        if not raw and isinstance(value.get("path"), list):
+            raw = "/" + "/".join(str(part) for part in value["path"])
+    raw = re.sub(r"^\{\{[^}]+\}\}", "", raw)
+    parsed = urlparse(raw)
+    path = parsed.path if parsed.scheme else raw.split("?", maxsplit=1)[0]
+    path = re.sub(r":([A-Za-z0-9_]+)", r"{\1}", path)
+    return path if path.startswith("/") else f"/{path.lstrip('/')}"
+
+
+def normalize_har(project_id: str, har: JsonObject, filename: str) -> list[ApiOperation]:
+    """Normalize unique request shapes from a HAR archive."""
+
+    operations: list[ApiOperation] = []
+    seen: set[tuple[str, str]] = set()
+    entries = har.get("log", {}).get("entries", [])
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("request"), dict):
+            continue
+        request = entry["request"]
+        method = str(request.get("method", "GET")).upper()
+        parsed = urlparse(str(request.get("url", "")))
+        path = parsed.path or "/"
+        identity = (method, path)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+        status_code = str(response.get("status", "default"))
+        operations.append(
+            ApiOperation(
+                id=new_id("op"),
+                operation_id=stable_operation_id(method, path),
+                project_id=project_id,
+                method=method,
+                path=path,
+                summary=f"HAR {method} {path}"[:500],
+                tags_json=dumps([parsed.hostname or Path(filename).stem]),
+                request_schema_json=dumps({"parameters": request.get("queryString", []), "body": {}}),
+                response_schema_json=dumps({"status": status_code, "schema": {}}),
+                auth_required=any(
+                    str(header.get("name", "")).lower() in {"authorization", "x-api-key"}
+                    for header in request.get("headers", [])
+                    if isinstance(header, dict)
+                ),
+                readiness=65,
+            )
+        )
+    if not operations:
+        raise ValueError("HAR 中没有可用请求记录")
+    return operations
+
+
+def _unique_operation_id(
+    operations: list[ApiOperation],
+    preferred: str,
+    method: str,
+    path: str,
+) -> str:
+    """Avoid business-ID collisions within one imported document."""
+
+    base = re.sub(r"[^A-Za-z0-9_-]+", "_", preferred).strip("_")
+    base = base or stable_operation_id(method, path)
+    existing = {item.operation_id for item in operations}
+    if base not in existing:
+        return base
+    suffix = 2
+    while f"{base}_{suffix}" in existing:
+        suffix += 1
+    return f"{base}_{suffix}"
+
+
+def external_payload_to_text(payload: Any) -> str:
+    """Convert common TAPD/knowledge REST payload shapes into requirement text."""
+
+    records = _find_record_list(payload)
+    if not records:
+        if isinstance(payload, str):
+            return payload
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+    lines: list[str] = []
+    title_keys = ("name", "title", "summary", "subject")
+    body_keys = ("description", "content", "body", "acceptance_criteria", "text")
+    for record in records[:500]:
+        title = next((str(record[key]) for key in title_keys if record.get(key)), "未命名需求")
+        body = next((str(record[key]) for key in body_keys if record.get(key)), "")
+        identifier = record.get("id") or record.get("story_id") or record.get("requirement_id")
+        prefix = f"[{identifier}] " if identifier else ""
+        lines.append(f"- {prefix}{title}：{body}".strip())
+    return "\n".join(lines)
+
+
+def _find_record_list(payload: Any) -> list[JsonObject]:
+    """Find the first list of object records in a nested connector response."""
+
+    if isinstance(payload, list) and all(isinstance(item, dict) for item in payload):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("stories", "requirements", "items", "records", "results", "data"):
+            if key in payload:
+                found = _find_record_list(payload[key])
+                if found:
+                    return found
+        for value in payload.values():
+            found = _find_record_list(value)
+            if found:
+                return found
+    return []
+
+
+def search_knowledge_documents(
+    documents: list[Document],
+    query: str,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Search private knowledge text locally with a deterministic token score."""
+
+    query_tokens = _tokens(query)
+    if not query_tokens:
+        return []
+    matches: list[dict[str, Any]] = []
+    for document in documents:
+        paragraphs = [item.strip() for item in re.split(r"\n\s*\n|\n", document.content) if item.strip()]
+        for paragraph in paragraphs:
+            score = len(query_tokens & _tokens(paragraph))
+            if score:
+                matches.append(
+                    {
+                        "document_id": document.id,
+                        "document_name": document.name,
+                        "source": f"knowledge://{document.knowledge_base_id}/{document.name}",
+                        "snippet": paragraph[:500],
+                        "score": score,
+                    }
+                )
+    matches.sort(key=lambda item: (-item["score"], item["document_name"]))
+    return matches[:limit]
 
 
 def map_requirements(

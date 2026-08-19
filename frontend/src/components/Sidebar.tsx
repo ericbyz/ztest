@@ -20,7 +20,7 @@ interface SidebarProps {
 
 const navItems: Array<{ key: NavKey; label: string; icon: ComponentType<{ size?: number }> }> = [
   { key: 'overview', label: '项目总览', icon: Gauge },
-  { key: 'documents', label: '文档中心', icon: FileText },
+  { key: 'documents', label: '接入中心', icon: FileText },
   { key: 'requirements', label: '需求中心', icon: ListChecks },
   { key: 'api', label: 'API 图谱', icon: GitFork },
   { key: 'scenarios', label: '场景编辑器', icon: FlaskConical },
@@ -59,7 +59,7 @@ export function Sidebar({ active, onNavigate, open, onClose }: SidebarProps) {
             <Users size={19} />
             <span>QA 团队</span>
           </button>
-          <button className="nav-item" type="button">
+          <button className={`nav-item ${active === 'settings' ? 'active' : ''}`} onClick={() => select('settings')} type="button">
             <Settings size={19} />
             <span>系统设置</span>
           </button>
@@ -68,4 +68,3 @@ export function Sidebar({ active, onNavigate, open, onClose }: SidebarProps) {
     </>
   )
 }
-

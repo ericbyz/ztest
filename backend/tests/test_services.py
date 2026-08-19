@@ -3,7 +3,7 @@
 import pytest
 
 from app.security import UnsafeTargetError, validate_target
-from app.services import normalize_operations, parse_openapi, validate_ir
+from app.services import normalize_operations, parse_api_document, parse_openapi, validate_ir
 
 
 def valid_ir() -> dict:
@@ -91,3 +91,28 @@ def test_ir_rejects_unknown_operation_and_variable() -> None:
 def test_network_policy_blocks_loopback_even_when_allowlisted() -> None:
     with pytest.raises(UnsafeTargetError, match="受保护网段"):
         validate_target("http://127.0.0.1:9000", ["127.0.0.1"])
+
+
+def test_postman_and_har_are_normalized() -> None:
+    """Support common non-OpenAPI API asset formats."""
+
+    postman = b'''{
+      "info": {"name": "Widgets", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+      "item": [{"name": "List widgets", "request": {"method": "GET", "url": "https://api.example.com/widgets"}}]
+    }'''
+    postman_kind, postman_operations = parse_api_document(
+        "project", "widgets.postman_collection.json", postman
+    )
+    assert postman_kind == "postman"
+    assert postman_operations[0].path == "/widgets"
+
+    har = b'''{
+      "log": {"version": "1.2", "entries": [
+        {"request": {"method": "POST", "url": "https://api.example.com/widgets", "headers": []},
+         "response": {"status": 201}}
+      ]}
+    }'''
+    har_kind, har_operations = parse_api_document("project", "capture.har", har)
+    assert har_kind == "har"
+    assert har_operations[0].method == "POST"
+    assert har_operations[0].response_schema_json == '{"schema": {}, "status": "201"}'
