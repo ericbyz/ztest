@@ -40,9 +40,28 @@ const PROVIDER_DEFAULTS: Record<LlmConfiguration['provider'], { model: string; b
   openai_compatible: { model: '', baseUrl: '' },
 }
 
+type ProviderChoice = LlmConfiguration['provider'] | 'deepseek'
+
+const PROVIDER_CHOICES: ProviderChoice[] = [
+  'deepseek', 'openai', 'azure_openai', 'anthropic', 'openai_compatible',
+]
+
+const DEEPSEEK_DEFAULT = {
+  model: 'deepseek-v4-flash',
+  baseUrl: 'https://api.deepseek.com',
+}
+
+function choiceFromConfiguration(configuration: LlmConfiguration): ProviderChoice {
+  if (
+    configuration.provider === 'openai_compatible'
+    && configuration.base_url.toLowerCase().includes('deepseek.com')
+  ) return 'deepseek'
+  return configuration.provider
+}
+
 export function SettingsView(props: SettingsViewProps) {
   const { configuration, onSave, onTest } = props
-  const [provider, setProvider] = useState(configuration.provider)
+  const [providerChoice, setProviderChoice] = useState<ProviderChoice>(() => choiceFromConfiguration(configuration))
   const [model, setModel] = useState(configuration.model)
   const [baseUrl, setBaseUrl] = useState(configuration.base_url)
   const [apiKey, setApiKey] = useState('')
@@ -51,9 +70,9 @@ export function SettingsView(props: SettingsViewProps) {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
 
-  const selectProvider = (next: LlmConfiguration['provider']) => {
-    const defaults = PROVIDER_DEFAULTS[next]
-    setProvider(next)
+  const selectProvider = (next: ProviderChoice) => {
+    const defaults = next === 'deepseek' ? DEEPSEEK_DEFAULT : PROVIDER_DEFAULTS[next]
+    setProviderChoice(next)
     setModel(defaults.model)
     setBaseUrl(defaults.baseUrl)
   }
@@ -62,7 +81,7 @@ export function SettingsView(props: SettingsViewProps) {
     setSaving(true)
     try {
       await onSave({
-        provider,
+        provider: providerChoice === 'deepseek' ? 'openai_compatible' : providerChoice,
         model,
         base_url: baseUrl,
         enabled,
@@ -88,15 +107,31 @@ export function SettingsView(props: SettingsViewProps) {
         <div className="settings-main-stack">
           <section className="settings-panel">
             <div className="settings-panel-title"><div className="settings-icon"><ServerCog size={20} /></div><div><h2>AI / LLM</h2><p>支持官方 Provider 和 OpenAI 兼容服务。</p></div><label className="switch-row"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />启用</label></div>
+            <div className={`saved-llm-summary ${configuration.updated_at ? '' : 'empty'}`}>
+              <span className="saved-llm-icon"><CheckCircle2 size={17} /></span>
+              <div>
+                <strong>{configuration.updated_at ? '当前已保存配置' : '尚未保存完整配置'}</strong>
+                <p>
+                  {configuration.updated_at
+                    ? `${providerDisplayName(configuration)} · ${configuration.model || '未填写模型'}`
+                    : '请选择 Provider 并填写模型，然后保存配置。'}
+                </p>
+                {configuration.updated_at && configuration.base_url ? <code>{configuration.base_url}</code> : null}
+              </div>
+              <span className={`configuration-state ${configuration.enabled ? 'enabled' : ''}`}>
+                {configuration.enabled ? '已启用' : '未启用'}
+              </span>
+            </div>
             <div className="provider-grid">
-              {(['openai', 'azure_openai', 'anthropic', 'openai_compatible'] as const).map((item) => (
-                <button className={provider === item ? 'selected' : ''} onClick={() => selectProvider(item)} type="button" key={item}>{providerLabel(item)}{provider === item ? <CheckCircle2 size={15} /> : null}</button>
+              {PROVIDER_CHOICES.map((item) => (
+                <button className={providerChoice === item ? 'selected' : ''} onClick={() => selectProvider(item)} type="button" key={item}>{providerLabel(item)}{providerChoice === item ? <CheckCircle2 size={15} /> : null}</button>
               ))}
             </div>
             <div className="settings-form">
               <label>模型名称<input value={model} onChange={(event) => setModel(event.target.value)} placeholder="例如 gpt-5 或内部部署模型名" /></label>
               <label>Base URL<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" /></label>
               <label>API Key<div className="secret-input"><KeyRound size={16} /><input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={configuration.has_api_key ? `${configuration.api_key_masked}（留空则保持不变）` : '输入后仅写入本机 Secret Store'} /></div></label>
+              {configuration.has_api_key ? <div className="saved-secret-status"><LockKeyhole size={14} />API Key 已保存在本机：<code>{configuration.api_key_masked}</code></div> : null}
               {configuration.has_api_key ? <label className="clear-secret"><input type="checkbox" checked={clearApiKey} onChange={(event) => setClearApiKey(event.target.checked)} />保存时清除当前 API Key</label> : null}
             </div>
             <footer><button className="button secondary" disabled={!configuration.has_api_key || testing} onClick={() => void test()} type="button"><Wifi size={16} />{testing ? '连接中…' : '测试连接'}</button><button className="button primary" disabled={!model || saving} onClick={() => void save()} type="button"><Save size={16} />{saving ? '保存中…' : '保存配置'}</button></footer>
@@ -202,13 +237,18 @@ function McpSettingsPanel(props: SettingsViewProps) {
   )
 }
 
-function providerLabel(provider: LlmConfiguration['provider']): string {
+function providerLabel(provider: ProviderChoice): string {
   return {
+    deepseek: 'DeepSeek',
     openai: 'OpenAI',
     azure_openai: 'Azure OpenAI',
     anthropic: 'Anthropic',
     openai_compatible: 'OpenAI 兼容',
   }[provider]
+}
+
+function providerDisplayName(configuration: LlmConfiguration): string {
+  return providerLabel(choiceFromConfiguration(configuration))
 }
 
 function displayMcpEndpoint(endpointUrl: string): string {

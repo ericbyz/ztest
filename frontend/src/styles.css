@@ -299,13 +299,24 @@ td small { font-size: 10px; color: #566278; }
 .settings-panel-title p { margin: 4px 0 0; color: #7b8798; font-size: 10px; }
 .switch-row { display: flex; align-items: center; gap: 6px; color: #40516b; font-size: 10px; font-weight: 650; }
 .switch-row input { accent-color: var(--blue); }
-.provider-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 18px 0; }
+.saved-llm-summary { margin-top: 18px; padding: 13px; border: 1px solid #c9e4d8; border-radius: 8px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; color: #315d50; background: #f3fbf8; }
+.saved-llm-summary.empty { border-color: #dce3ed; color: #657287; background: #fafbfd; }
+.saved-llm-icon { width: 29px; height: 29px; border-radius: 50%; display: grid; place-items: center; color: #087554; background: #dff4eb; }
+.saved-llm-summary.empty .saved-llm-icon { color: #78869a; background: #edf1f6; }
+.saved-llm-summary strong { display: block; font-size: 11px; }
+.saved-llm-summary p { margin: 3px 0 0; color: #5f756e; font-size: 10px; }
+.saved-llm-summary code, .saved-secret-status code { display: inline-block; margin-top: 5px; color: #52677f; font: 9px "Cascadia Code", monospace; overflow-wrap: anywhere; }
+.configuration-state { padding: 4px 7px; border-radius: 999px; color: #7a6570; background: #f2e9ed; font-size: 9px; font-weight: 700; white-space: nowrap; }
+.configuration-state.enabled { color: #087554; background: #dff4eb; }
+.provider-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; padding: 18px 0; }
 .provider-grid button { min-height: 52px; padding: 8px; border: 1px solid #dce3ed; border-radius: 7px; color: #59677e; background: #fafbfd; display: flex; justify-content: center; align-items: center; gap: 6px; font-size: 10px; cursor: pointer; }
 .provider-grid button.selected { border-color: #78a0f4; color: #164fac; background: #f2f6ff; box-shadow: 0 0 0 2px rgba(34,97,224,.07); }
 .settings-form { display: grid; gap: 13px; }
 .secret-input { position: relative; }
 .secret-input > svg { position: absolute; left: 10px; top: 10px; color: #7c899b; }
 .secret-input input { padding-left: 34px; }
+.saved-secret-status { margin-top: -5px; display: flex; align-items: center; gap: 5px; color: #087554; font-size: 9px; }
+.saved-secret-status code { margin-top: 0; }
 .clear-secret { display: flex !important; grid-template-columns: auto 1fr; align-items: center; }
 .clear-secret input { width: auto; min-height: auto; accent-color: #b93c48; }
 .settings-panel > footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid #e8ecf2; }
