@@ -7,9 +7,11 @@ from app.models import ApiOperation, Scenario
 from app.services import (
     derive_operation_relationships,
     dumps,
+    external_payload_to_text,
     normalize_operations,
     parse_api_document,
     parse_openapi,
+    parse_requirements,
     validate_ir,
 )
 
@@ -182,3 +184,36 @@ def test_operation_relationships_are_traceable_and_deterministic() -> None:
     assert any(edge["kind"] == "schema_flow" and "widget_id" in edge["evidence"] for edge in edges)
     assert any(edge["kind"] == "resource_relation" and edge["confidence"] == 82 for edge in edges)
     assert edges == derive_operation_relationships([create, get, remove], [scenario])
+
+
+def test_tapd_payload_becomes_plain_traceable_requirements() -> None:
+    payload = {
+        "requirements": [{
+            "requirement_id": "TAPD-1156559367001006676",
+            "title": "密码错误新增交互",
+            "description": "<p><strong>必须</strong>提示密码错误</p><script>bad()</script>",
+            "tapd_status": "developing",
+            "module": "外部分享",
+        }]
+    }
+
+    text = external_payload_to_text(payload)
+    requirements = parse_requirements("project", "tapd.txt", text)
+
+    assert "<p>" not in text
+    assert "bad()" not in text
+    assert requirements[0].requirement_id == "TAPD-1156559367001006676"
+    assert requirements[0].title == "密码错误新增交互"
+    assert "状态：developing" in requirements[0].text
+
+
+def test_requirement_parser_keeps_full_connector_snapshot() -> None:
+    text = "\n".join(
+        f"- TAPD-{100000 + index} 需求 {index}：必须保留这一条真实需求"
+        for index in range(120)
+    )
+
+    requirements = parse_requirements("project", "tapd.txt", text)
+
+    assert len(requirements) == 120
+    assert requirements[-1].requirement_id == "TAPD-100119"

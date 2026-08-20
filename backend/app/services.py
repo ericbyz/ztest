@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import html
 import io
 import json
 import re
@@ -26,7 +27,9 @@ JsonObject = dict[str, Any]
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 VARIABLE_PATTERN = re.compile(r"\$\{([A-Za-z0-9_.-]+)\}")
-REQUIREMENT_ID_PATTERN = re.compile(r"\b(?:FR|US|AC)-[A-Z]+-?\d+\b|\b(?:FR|US|AC)-\d+\b")
+REQUIREMENT_ID_PATTERN = re.compile(
+    r"\b(?:FR|US|AC)-[A-Z]+-?\d+\b|\b(?:FR|US|AC)-\d+\b|\bTAPD-\d+\b"
+)
 WORD_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_-]+|[\u4e00-\u9fff]{2,}")
 GRAPH_IGNORED_FIELDS = {
     "code", "data", "error", "id", "message", "name", "page", "path",
@@ -282,14 +285,18 @@ def parse_requirements(
 
     requirements: list[Requirement] = []
     seen_ids: set[str] = set()
-    for index, (line_number, candidate) in enumerate(candidates[:100], start=1):
+    # Connector snapshots can legitimately contain hundreds of atomic stories.
+    # Keep this aligned with ``external_payload_to_text`` so a TAPD sync does
+    # not silently truncate the project after the first 100 records.
+    for index, (line_number, candidate) in enumerate(candidates[:500], start=1):
         explicit = REQUIREMENT_ID_PATTERN.search(candidate)
         requirement_id = explicit.group(0) if explicit else f"REQ-{index:03d}"
         if requirement_id in seen_ids:
             requirement_id = f"{requirement_id}-{index}"
         seen_ids.add(requirement_id)
 
-        title = re.sub(r"^[A-Z-]+\d+[:：\s-]*", "", candidate)[:80].strip(" ：:")
+        title_source = re.sub(r"^[A-Z-]+\d+[:：\s-]*", "", candidate).strip(" ：:")
+        title = re.split(r"[：:]", title_source, maxsplit=1)[0][:80].strip() or requirement_id
         rules = _extract_business_rules(candidate)
         ambiguities = _detect_ambiguities(candidate)
         confidence = 0.9 if explicit and not ambiguities else 0.72 if ambiguities else 0.82
@@ -630,12 +637,42 @@ def external_payload_to_text(payload: Any) -> str:
     title_keys = ("name", "title", "summary", "subject")
     body_keys = ("description", "content", "body", "acceptance_criteria", "text")
     for record in records[:500]:
+        record = _unwrap_connector_record(record)
         title = next((str(record[key]) for key in title_keys if record.get(key)), "未命名需求")
-        body = next((str(record[key]) for key in body_keys if record.get(key)), "")
-        identifier = record.get("id") or record.get("story_id") or record.get("requirement_id")
-        prefix = f"[{identifier}] " if identifier else ""
-        lines.append(f"- {prefix}{title}：{body}".strip())
+        body = next((_connector_plain_text(str(record[key])) for key in body_keys if record.get(key)), "")
+        identifier = record.get("requirement_id") or record.get("story_id") or record.get("id")
+        prefix = f"{identifier} " if identifier else ""
+        metadata = " · ".join(
+            f"{label}{record[key]}"
+            for key, label in (("tapd_status", "状态："), ("module", "模块："), ("owner", "负责人："))
+            if record.get(key)
+        )
+        detail = "；".join(item for item in (body, metadata) if item)
+        lines.append(f"- {prefix}{title}{f'：{detail}' if detail else ''}".strip())
     return "\n".join(lines)
+
+
+def _unwrap_connector_record(record: JsonObject) -> JsonObject:
+    """Unwrap entity containers used by TAPD and similar connector APIs."""
+
+    for key in ("Story", "story", "Task", "task", "Requirement", "requirement"):
+        value = record.get(key)
+        if isinstance(value, dict):
+            return value
+    return record
+
+
+def _connector_plain_text(value: str) -> str:
+    """Convert connector HTML descriptions to compact, non-executable plain text."""
+
+    without_blocks = re.sub(
+        r"<(script|style)\b[^>]*>.*?</\1>",
+        " ",
+        value,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    without_tags = re.sub(r"<[^>]+>", " ", without_blocks)
+    return re.sub(r"\s+", " ", html.unescape(without_tags)).strip()
 
 
 def _find_record_list(payload: Any) -> list[JsonObject]:

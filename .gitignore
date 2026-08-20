@@ -7,6 +7,7 @@ frontend/node_modules/
 frontend/dist/
 coverage/
 .env
+.mcp.json
 backend/.local/
 .local/
 local-data/

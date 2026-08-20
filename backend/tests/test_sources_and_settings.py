@@ -238,6 +238,12 @@ def test_tapd_mcp_project_selection_and_sync(monkeypatch) -> None:
         assert synced.status_code == 200
         assert synced.json()["source_uri"].startswith("mcp+http://127.0.0.1:3333/mcp#project=10002")
         assert calls == [("10002", "list_stories")]
+        synced_again = client.post(f"/api/sources/{connector['id']}:sync")
+        assert synced_again.status_code == 200
+        requirements = client.get(f"/api/projects/{project_id}/requirements").json()
+        documents = client.get(f"/api/projects/{project_id}/documents").json()
+        assert len(requirements) == 1
+        assert len(documents) == 1
 
     with SessionLocal() as session:
         project_row = session.get(Project, project_id)

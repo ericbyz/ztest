@@ -45,6 +45,8 @@ Authorization = "private-test-header"
         encoding="utf-8",
     )
     monkeypatch.setattr(mcp_client.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(mcp_client, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mcp_client, "read_mcp_servers", lambda: [])
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
 
     servers, _ = mcp_client._config_candidates()
@@ -90,6 +92,8 @@ def test_claude_code_stdio_proxy_url_is_discovered_without_executing_command(
         encoding="utf-8",
     )
     monkeypatch.setattr(mcp_client.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(mcp_client, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mcp_client, "read_mcp_servers", lambda: [])
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
 
     servers, stdio_names = mcp_client._config_candidates()
@@ -221,3 +225,105 @@ def test_tapd_tools_and_projects_are_selected_semantically() -> None:
         ("1001", "支付平台"),
         ("1002", "订单中心"),
     ]
+
+
+def test_requirement_tool_prefers_entity_listing_over_count_and_metadata_tools() -> None:
+    tools = [
+        McpTool(
+            "get_story_or_task_count",
+            "获取 TAPD 需求或者任务的数量",
+            {"properties": {"workspace_id": {"type": "string"}}},
+        ),
+        McpTool(
+            "get_stories_fields_info",
+            "获取 TAPD 需求字段配置",
+            {"properties": {"workspace_id": {"type": "string"}}},
+        ),
+        McpTool(
+            "get_bug",
+            "获取 TAPD 需求关联的缺陷",
+            {"properties": {"workspace_id": {"type": "string"}}},
+        ),
+        McpTool(
+            "get_stories_or_tasks",
+            "获取 TAPD 需求或任务；示例流程：查询后可创建",
+            {"properties": {"workspace_id": {"type": "string"}}},
+        ),
+    ]
+    assert choose_requirement_tool(tools).name == "get_stories_or_tasks"
+
+
+def test_tool_payload_decodes_nested_json_strings() -> None:
+    inner = {"status": 1, "data": [{"Workspace": {"id": "22616271", "name": "铁威马"}}]}
+
+    structured = {"structuredContent": {"result": json.dumps(inner, ensure_ascii=False)}}
+    projects = parse_projects(mcp_client._tool_payload(structured))
+    assert [(project.id, project.name) for project in projects] == [("22616271", "铁威马")]
+
+    wrapped = json.dumps(
+        {"content": [{"type": "text", "text": json.dumps({"result": json.dumps(inner, ensure_ascii=False)}, ensure_ascii=False)}]},
+        ensure_ascii=False,
+    )
+    projects = parse_projects(mcp_client._tool_payload(json.loads(wrapped)))
+    assert projects[0].id == "22616271"
+
+
+def test_fetch_requirements_replaces_metadata_tool_and_paginates(monkeypatch) -> None:
+    """Migrate stale count-tool bindings and retrieve normalized Story pages."""
+
+    calls: list[tuple[str, dict]] = []
+    count_tool = McpTool(
+        "get_story_or_task_count",
+        "获取 TAPD 需求数量",
+        {"properties": {"workspace_id": {"type": "integer"}}},
+    )
+    story_tool = McpTool(
+        "get_stories_or_tasks",
+        "获取 TAPD 需求列表",
+        {
+            "properties": {
+                "workspace_id": {"type": "integer"},
+                "options": {"type": "object"},
+            }
+        },
+    )
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def list_tools(self):
+            return [count_tool, story_tool]
+
+        def call_tool(self, name, arguments):
+            calls.append((name, arguments))
+            page = arguments["options"]["page"]
+            rows = {
+                1: [
+                    {"Story": {"id": "101", "name": "需求一", "description": "<p>必须成功</p>"}},
+                    {"Story": {"id": "102", "name": "需求二", "description": "应返回结果"}},
+                ],
+                2: [{"Story": {"id": "103", "name": "需求三", "description": "需要审核"}}],
+            }.get(page, [])
+            inner = {"status": 1, "data": rows}
+            return {"structuredContent": {"result": json.dumps(inner, ensure_ascii=False)}}
+
+    monkeypatch.setattr(mcp_client, "StreamableHttpMcpClient", FakeClient)
+    monkeypatch.setattr(mcp_client, "TAPD_PAGE_SIZE", 2)
+
+    payload, selected = mcp_client.fetch_tapd_requirements(
+        "http://127.0.0.1:3333/mcp", "56559367", "get_story_or_task_count"
+    )
+
+    assert selected == "get_stories_or_tasks"
+    assert [item["requirement_id"] for item in payload["requirements"]] == [
+        "TAPD-101", "TAPD-102", "TAPD-103"
+    ]
+    assert [call[1]["options"]["page"] for call in calls] == [1, 2]
+    assert all(call[0] == "get_stories_or_tasks" for call in calls)

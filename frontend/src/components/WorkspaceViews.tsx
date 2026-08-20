@@ -27,7 +27,14 @@ export function RequirementsView({ requirements, onApprove, onAnalyze, onGenerat
   onGenerate?: (recordIds: string[]) => Promise<void>
 }) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const toggle = (recordId: string) => setSelected((current) => {
+    const next = new Set(current)
+    if (next.has(recordId)) next.delete(recordId)
+    else next.add(recordId)
+    return next
+  })
+  const toggleExpanded = (recordId: string) => setExpanded((current) => {
     const next = new Set(current)
     if (next.has(recordId)) next.delete(recordId)
     else next.add(recordId)
@@ -47,7 +54,17 @@ export function RequirementsView({ requirements, onApprove, onAnalyze, onGenerat
               <span className={`review-state ${item.status}`}>{item.status === 'approved' ? '已审核' : '待审核'}</span>
             </div>
             <h3>{item.title}</h3>
-            <p>{item.text}</p>
+            <p className={expanded.has(item.record_id) ? 'expanded' : ''}>{item.text}</p>
+            {item.text.length > 240 ? (
+              <button
+                aria-expanded={expanded.has(item.record_id)}
+                className="requirement-detail-toggle"
+                onClick={() => toggleExpanded(item.record_id)}
+                type="button"
+              >
+                {expanded.has(item.record_id) ? '收起详情' : '展开详情'}
+              </button>
+            ) : null}
             <div className="trace-source">来源 {item.source} · 置信度 {Math.round(item.confidence * 100)}%</div>
             {item.ambiguities.map((ambiguity) => <div className="ambiguity" key={ambiguity}><AlertTriangle size={14} /> {ambiguity}</div>)}
             <div className="mapping-row">

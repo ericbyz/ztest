@@ -367,7 +367,10 @@ td small { font-size: 10px; color: #566278; }
 .requirement-id { color: #155be2; font: 650 11px "Cascadia Code", monospace; margin-right: 7px; }
 .priority { color: #a45b06; background: #fff0db; }
 .requirement-card h3 { margin: 13px 0 7px; font-size: 16px; }
-.requirement-card > p { margin: 0; color: #4d5a70; font-size: 13px; line-height: 1.65; }
+.requirement-card > p { margin: 0; color: #4d5a70; font-size: 13px; line-height: 1.65; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+.requirement-card > p.expanded { display: block; overflow: visible; }
+.requirement-detail-toggle { margin: 7px 0 0; padding: 0; border: 0; color: #155be2; background: transparent; cursor: pointer; font-family: inherit; font-size: 11px; font-weight: 600; }
+.requirement-detail-toggle:hover { color: #0c45b4; text-decoration: underline; }
 .trace-source { margin-top: 9px; font-size: 10px; color: #8590a2; }
 .ambiguity { margin-top: 10px; padding: 8px; color: #9c5a09; background: #fff7e9; border-radius: 5px; display: flex; align-items: center; gap: 6px; font-size: 10px; }
 .mapping-row { min-height: 42px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 12px 0; }

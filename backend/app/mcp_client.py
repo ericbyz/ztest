@@ -30,10 +30,34 @@ DEFAULT_DISCOVERY_URLS = (
     "http://127.0.0.1:8080/mcp",
 )
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+REPO_ROOT = Path(__file__).resolve().parents[2]
 READ_WORDS = ("list", "get", "search", "query", "read", "fetch", "查询", "获取", "列表")
 WRITE_WORDS = ("create", "update", "delete", "remove", "write", "创建", "更新", "删除")
 PROJECT_WORDS = ("workspace", "project", "space", "工作空间", "项目")
 REQUIREMENT_WORDS = ("story", "stories", "requirement", "需求", "故事")
+META_WORDS = (
+    "count",
+    "数量",
+    "field",
+    "字段",
+    "workflow",
+    "工作流",
+    "transition",
+    "状态",
+    "comment",
+    "评论",
+    "attachment",
+    "附件",
+    "label",
+    "lable",
+    "标签",
+)
+TAPD_PAGE_SIZE = 100
+TAPD_MAX_PAGES = 20
+TAPD_STORY_FIELDS = (
+    "id,name,description,status,priority,priority_label,module,owner,"
+    "iteration_id,parent_id,workitem_type_id,modified"
+)
 
 
 class McpError(ValueError):
@@ -280,16 +304,29 @@ def choose_project_tool(tools: list[McpTool]) -> McpTool | None:
 
 
 def choose_requirement_tool(tools: list[McpTool]) -> McpTool | None:
-    """Select a read-only TAPD story/requirement tool by description and schema."""
+    """Select a read-only TAPD story/requirement tool by name-weighted semantics.
+
+    Long tool descriptions may mention write verbs inside usage examples, so only
+    write words in the tool *name* disqualify; the name also dominates the score.
+    Metadata tools (count/field/workflow/...) return statistics or configuration
+    instead of requirement entities and are skipped outright.
+    """
 
     candidates: list[tuple[int, McpTool]] = []
     for tool in tools:
-        text = _tool_text(tool)
-        if any(word in text for word in WRITE_WORDS):
+        name = tool.name.lower()
+        description = tool.description.lower()
+        if any(word in name for word in META_WORDS):
             continue
-        if not any(word in text for word in REQUIREMENT_WORDS):
+        if any(word in name for word in WRITE_WORDS):
             continue
-        score = _read_score(text) + (4 if "tapd" in text else 0)
+        name_match = any(word in name for word in REQUIREMENT_WORDS)
+        if not name_match and not any(word in description for word in REQUIREMENT_WORDS):
+            continue
+        score = _read_score(name) * 3 + _read_score(description)
+        score += 8 if name_match else 0
+        if "tapd" in name or "tapd" in description:
+            score += 4
         properties = tool.input_schema.get("properties", {})
         if isinstance(properties, dict) and any(
             key in properties for key in ("workspace_id", "workspace", "project_id")
@@ -299,7 +336,12 @@ def choose_requirement_tool(tools: list[McpTool]) -> McpTool | None:
     return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
 
-def _tool_arguments(tool: McpTool, project_id: str = "") -> dict[str, Any]:
+def _tool_arguments(
+    tool: McpTool,
+    project_id: str = "",
+    *,
+    page: int | None = None,
+) -> dict[str, Any]:
     schema = tool.input_schema
     properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
     properties = properties if isinstance(properties, dict) else {}
@@ -327,8 +369,20 @@ def _tool_arguments(tool: McpTool, project_id: str = "") -> dict[str, Any]:
             raise McpError("TAPD 需求工具未声明项目参数，无法保证按所选项目隔离同步")
     for key in ("page_size", "pageSize", "limit", "per_page"):
         if key in properties:
-            arguments[key] = 100
+            arguments[key] = TAPD_PAGE_SIZE
             break
+    if page is not None:
+        for key in ("page", "page_number", "pageNumber"):
+            if key in properties:
+                arguments[key] = page
+                break
+        if "options" in properties:
+            arguments["options"] = {
+                "entity_type": "stories",
+                "fields": TAPD_STORY_FIELDS,
+                "limit": TAPD_PAGE_SIZE,
+                "page": page,
+            }
     required = schema.get("required", []) if isinstance(schema, dict) else []
     missing = [key for key in required if key not in arguments]
     if missing:
@@ -336,10 +390,44 @@ def _tool_arguments(tool: McpTool, project_id: str = "") -> dict[str, Any]:
     return arguments
 
 
+def _tool_supports_paging(tool: McpTool) -> bool:
+    """Return whether a requirement tool exposes top-level or nested paging."""
+
+    properties = tool.input_schema.get("properties", {})
+    if not isinstance(properties, dict):
+        return False
+    return "options" in properties or any(
+        key in properties for key in ("page", "page_number", "pageNumber")
+    )
+
+
+def _decode_json_strings(value: Any, depth: int = 0) -> Any:
+    """Recursively decode JSON-encoded string values.
+
+    Some MCP servers (notably mcp-server-tapd) return tool results as nested
+    JSON strings, e.g. {"result": "{\"data\": [...]}"}; without this decode the
+    inner payload stays an opaque string and entity parsing finds nothing.
+    """
+
+    if depth > 4:
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+        return parsed if isinstance(parsed, (dict, list)) else value
+    if isinstance(value, list):
+        return [_decode_json_strings(item, depth + 1) for item in value]
+    if isinstance(value, dict):
+        return {key: _decode_json_strings(item, depth + 1) for key, item in value.items()}
+    return value
+
+
 def _tool_payload(result: dict[str, Any]) -> Any:
     structured = result.get("structuredContent")
     if structured is not None:
-        return structured
+        return _decode_json_strings(structured)
     content = result.get("content", [])
     blocks: list[Any] = []
     for item in content if isinstance(content, list) else []:
@@ -350,9 +438,7 @@ def _tool_payload(result: dict[str, Any]) -> Any:
             blocks.append(json.loads(text))
         except json.JSONDecodeError:
             blocks.append(text)
-    if len(blocks) == 1:
-        return blocks[0]
-    return blocks
+    return _decode_json_strings(blocks[0] if len(blocks) == 1 else blocks)
 
 
 def _project_records(value: Any) -> list[dict[str, Any]]:
@@ -561,7 +647,7 @@ def _managed_server_candidates() -> list[McpServerConfig]:
 def _config_candidates() -> tuple[list[McpServerConfig], list[str]]:
     """Read trusted MCP registrations while keeping commands and secrets private."""
 
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = REPO_ROOT
     user_home = Path.home()
     app_data = Path(os.getenv("APPDATA", user_home / "AppData" / "Roaming"))
     json_paths = (
@@ -699,13 +785,74 @@ def fetch_tapd_requirements(
     project_id: str,
     tool_name: str = "",
 ) -> tuple[Any, str]:
-    """Read requirements for exactly one selected TAPD project."""
+    """Read and normalize all TAPD stories for exactly one selected project."""
 
-    with StreamableHttpMcpClient(endpoint_url, timeout=20.0) as client:
+    with StreamableHttpMcpClient(endpoint_url, timeout=30.0) as client:
         tools = client.list_tools()
-        tool = next((item for item in tools if item.name == tool_name), None) if tool_name else None
-        tool = tool or choose_requirement_tool(tools)
+        configured = next((item for item in tools if item.name == tool_name), None) if tool_name else None
+        configured_is_entity_reader = (
+            configured is not None and choose_requirement_tool([configured]) is not None
+        )
+        tool = configured if configured_is_entity_reader else choose_requirement_tool(tools)
         if tool is None:
             raise McpError("本地 MCP Server 没有可用的只读 TAPD 需求工具")
-        result = client.call_tool(tool.name, _tool_arguments(tool, project_id))
-    return _tool_payload(result), tool.name
+        paged = _tool_supports_paging(tool)
+        records: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for page in range(1, TAPD_MAX_PAGES + 1):
+            arguments = _tool_arguments(tool, project_id, page=page if paged else None)
+            result = client.call_tool(tool.name, arguments)
+            page_records = _tapd_requirement_records(_tool_payload(result))
+            new_records = []
+            for record in page_records:
+                identifier = str(record.get("id") or record.get("story_id") or "").strip()
+                if not identifier or identifier in seen_ids:
+                    continue
+                seen_ids.add(identifier)
+                new_records.append(_normalize_tapd_requirement(record, identifier))
+            records.extend(new_records)
+            if not paged or len(page_records) < TAPD_PAGE_SIZE or not new_records:
+                break
+    if not records:
+        raise McpError(f"工具 {tool.name} 未返回 TAPD 需求实体，请检查项目和筛选条件")
+    return {"requirements": records}, tool.name
+
+
+def _tapd_requirement_records(value: Any) -> list[dict[str, Any]]:
+    """Extract Story/Task entities without mistaking count or metadata payloads for stories."""
+
+    if isinstance(value, list):
+        records: list[dict[str, Any]] = []
+        for item in value:
+            records.extend(_tapd_requirement_records(item))
+        return records
+    if not isinstance(value, dict):
+        return []
+    for wrapper in ("Story", "story", "Task", "task"):
+        entity = value.get(wrapper)
+        if isinstance(entity, dict) and entity.get("id") and entity.get("name"):
+            return [entity]
+    if value.get("id") and (value.get("name") or value.get("title")):
+        return [value]
+    records = []
+    for key in ("stories", "tasks", "requirements", "items", "records", "results", "data", "result"):
+        child = value.get(key)
+        if isinstance(child, (dict, list)):
+            records.extend(_tapd_requirement_records(child))
+    return records
+
+
+def _normalize_tapd_requirement(record: dict[str, Any], identifier: str) -> dict[str, Any]:
+    """Keep stable TAPD identity and useful provenance fields in a generic requirement shape."""
+
+    return {
+        "requirement_id": f"TAPD-{identifier}",
+        "title": str(record.get("name") or record.get("title") or f"TAPD {identifier}"),
+        "description": str(record.get("description") or ""),
+        "tapd_status": str(record.get("status") or ""),
+        "priority": str(record.get("priority_label") or record.get("priority") or ""),
+        "module": str(record.get("module") or ""),
+        "owner": str(record.get("owner") or ""),
+        "iteration_id": str(record.get("iteration_id") or ""),
+        "modified": str(record.get("modified") or ""),
+    }

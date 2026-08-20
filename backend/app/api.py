@@ -713,6 +713,24 @@ def _persist_synced_source(
     requirements = parse_requirements(source.project_id, document_name, text)
     for requirement in requirements:
         requirement.source = f"{source.source_type}://{source.id}/{requirement.source}"
+    requirements_to_add = _reconcile_synced_requirements(session, source, requirements)
+    if requirements:
+        document_prefix = (
+            f"mcp+{source.endpoint_url}#project={source.workspace_id}"
+            if source.source_type == "tapd"
+            else source.endpoint_url
+        )
+        stale_documents = list(
+            session.scalars(
+                select(Document).where(
+                    Document.project_id == source.project_id,
+                    Document.source_type == source.source_type,
+                    Document.source_uri.startswith(document_prefix),
+                )
+            ).all()
+        )
+        for stale_document in stale_documents:
+            session.delete(stale_document)
     document = Document(
         id=new_id("doc"),
         project_id=source.project_id,
@@ -729,9 +747,56 @@ def _persist_synced_source(
     source.status = "synced"
     source.last_sync_at = utc_now()
     session.add(document)
-    session.add_all(requirements)
+    session.add_all(requirements_to_add)
     session.commit()
     return _document_view(document)
+
+
+def _reconcile_synced_requirements(
+    session: Session,
+    source: SourceConnector,
+    incoming: list[Requirement],
+) -> list[Requirement]:
+    """Update a connector snapshot by stable business ID while preserving review state."""
+
+    if not incoming:
+        return []
+    source_prefix = f"{source.source_type}://{source.id}/%"
+    existing = list(
+        session.scalars(
+            select(Requirement).where(
+                Requirement.project_id == source.project_id,
+                Requirement.source.like(source_prefix),
+            )
+        ).all()
+    )
+    existing_by_id: dict[str, Requirement] = {}
+    for requirement in existing:
+        duplicate = existing_by_id.get(requirement.requirement_id)
+        if duplicate is None:
+            existing_by_id[requirement.requirement_id] = requirement
+        else:
+            session.delete(requirement)
+
+    to_add: list[Requirement] = []
+    synchronized_ids: set[str] = set()
+    for requirement in incoming:
+        synchronized_ids.add(requirement.requirement_id)
+        current = existing_by_id.get(requirement.requirement_id)
+        if current is None:
+            to_add.append(requirement)
+            continue
+        current.title = requirement.title
+        current.text = requirement.text
+        current.source = requirement.source
+        current.priority = requirement.priority
+        current.confidence = requirement.confidence
+        current.business_rules_json = requirement.business_rules_json
+        current.ambiguities_json = requirement.ambiguities_json
+    for requirement_id, requirement in existing_by_id.items():
+        if requirement_id not in synchronized_ids:
+            session.delete(requirement)
+    return to_add
 
 
 @router.get(
