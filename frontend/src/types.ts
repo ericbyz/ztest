@@ -248,3 +248,22 @@ export interface OperationItem {
   auth_required: boolean
   readiness: number
 }
+
+export type OperationRelationKind = 'scenario_flow' | 'schema_flow' | 'resource_relation'
+
+export interface OperationGraphEdge {
+  id: string
+  source: string
+  target: string
+  kind: OperationRelationKind
+  basis: 'explicit' | 'inferred' | 'structural'
+  label: string
+  evidence: string
+  confidence: number
+}
+
+export interface OperationGraph {
+  nodes: OperationItem[]
+  edges: OperationGraphEdge[]
+  groups: string[]
+}

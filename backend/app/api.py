@@ -62,6 +62,8 @@ from .schemas import (
     McpServerConfiguration,
     McpServerConfigurationView,
     McpServerView,
+    OperationGraphEdge,
+    OperationGraphView,
     OperationView,
     ProjectCreate,
     ProjectUpdate,
@@ -85,6 +87,7 @@ from .services import (
     build_scenario,
     checksum,
     dumps,
+    derive_operation_relationships,
     execute_scenario,
     export_pytest,
     external_payload_to_text,
@@ -1249,6 +1252,31 @@ def list_operations(project_id: str, session: SessionDep) -> list[OperationView]
     _project_or_404(session, project_id)
     rows = session.scalars(select(ApiOperation).where(ApiOperation.project_id == project_id)).all()
     return [_operation_view(row) for row in rows]
+
+
+@router.get("/projects/{project_id}/operation-graph", response_model=OperationGraphView)
+def operation_graph(project_id: str, session: SessionDep) -> OperationGraphView:
+    """Return operations and evidence-backed relationships for graph exploration."""
+
+    _project_or_404(session, project_id)
+    operations = list(
+        session.scalars(select(ApiOperation).where(ApiOperation.project_id == project_id)).all()
+    )
+    scenarios = list(
+        session.scalars(select(Scenario).where(Scenario.project_id == project_id)).all()
+    )
+    edges = derive_operation_relationships(operations, scenarios)
+    groups = sorted({
+        str(tag)
+        for operation in operations
+        for tag in loads(operation.tags_json, [])
+        if str(tag).strip()
+    })
+    return OperationGraphView(
+        nodes=[_operation_view(operation) for operation in operations],
+        edges=[OperationGraphEdge(**edge) for edge in edges],
+        groups=groups,
+    )
 
 
 @router.post("/projects/{project_id}/scenarios:generate", response_model=ScenarioView)

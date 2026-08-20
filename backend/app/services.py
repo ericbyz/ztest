@@ -28,6 +28,11 @@ WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 VARIABLE_PATTERN = re.compile(r"\$\{([A-Za-z0-9_.-]+)\}")
 REQUIREMENT_ID_PATTERN = re.compile(r"\b(?:FR|US|AC)-[A-Z]+-?\d+\b|\b(?:FR|US|AC)-\d+\b")
 WORD_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_-]+|[\u4e00-\u9fff]{2,}")
+GRAPH_IGNORED_FIELDS = {
+    "code", "data", "error", "id", "message", "name", "page", "path",
+    "status", "success", "timestamp", "total", "type", "value",
+}
+GRAPH_KIND_ORDER = {"scenario_flow": 0, "schema_flow": 1, "resource_relation": 2}
 
 
 def dumps(value: Any) -> str:
@@ -43,6 +48,191 @@ def loads(value: str, fallback: Any) -> Any:
         return json.loads(value)
     except (json.JSONDecodeError, TypeError):
         return fallback
+
+
+def derive_operation_relationships(
+    operations: list[ApiOperation],
+    scenarios: list[Scenario],
+) -> list[dict[str, Any]]:
+    """Derive bounded, deterministic API relationships with visible evidence."""
+
+    operation_ids = {operation.operation_id for operation in operations}
+    edges: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    def add_edge(
+        source: str,
+        target: str,
+        kind: str,
+        basis: str,
+        label: str,
+        evidence: str,
+        confidence: int,
+    ) -> None:
+        if source == target or source not in operation_ids or target not in operation_ids:
+            return
+        key = (source, target, kind)
+        if key in edges:
+            return
+        digest = hashlib.sha1("|".join(key).encode("utf-8")).hexdigest()[:12]
+        edges[key] = {
+            "id": f"edge_{digest}",
+            "source": source,
+            "target": target,
+            "kind": kind,
+            "basis": basis,
+            "label": label,
+            "evidence": evidence,
+            "confidence": confidence,
+        }
+
+    for scenario in sorted(scenarios, key=lambda item: (item.name, item.id)):
+        ir = loads(scenario.ir_json, {})
+        steps = ir.get("steps", []) if isinstance(ir, dict) else []
+        sequence = [
+            str(step.get("operation_id", ""))
+            for step in steps
+            if isinstance(step, dict) and step.get("operation_id")
+        ]
+        for index, (source, target) in enumerate(zip(sequence, sequence[1:]), start=1):
+            add_edge(
+                source,
+                target,
+                "scenario_flow",
+                "explicit",
+                "场景顺序",
+                f"场景“{scenario.name}”第 {index} 步之后调用第 {index + 1} 步",
+                100,
+            )
+
+    ordered_operations = sorted(operations, key=lambda item: item.operation_id)
+    schema_candidates: list[tuple[int, str, str, list[str]]] = []
+    for source in ordered_operations:
+        response_fields = _graph_schema_fields(loads(source.response_schema_json, {}))
+        if not response_fields:
+            continue
+        source_tags = set(loads(source.tags_json, []))
+        for target in ordered_operations:
+            if source.operation_id == target.operation_id:
+                continue
+            request_fields = _graph_schema_fields(loads(target.request_schema_json, {}))
+            shared = sorted((response_fields & request_fields) - GRAPH_IGNORED_FIELDS)
+            if not shared:
+                continue
+            target_tags = set(loads(target.tags_json, []))
+            has_identifier = any(field.endswith("_id") for field in shared)
+            if len(shared) < 2 and not has_identifier:
+                continue
+            if not source_tags.intersection(target_tags) and len(shared) < 2:
+                continue
+            schema_candidates.append((len(shared), source.operation_id, target.operation_id, shared))
+
+    outgoing_counts: Counter[str] = Counter()
+    for _, source, target, shared in sorted(
+        schema_candidates,
+        key=lambda item: (-item[0], item[1], item[2]),
+    ):
+        if outgoing_counts[source] >= 3 or sum(
+            edge["kind"] == "schema_flow" for edge in edges.values()
+        ) >= 40:
+            continue
+        fields = "、".join(shared[:4])
+        add_edge(
+            source,
+            target,
+            "schema_flow",
+            "inferred",
+            "数据传递",
+            f"源响应与目标请求共享字段：{fields}",
+            min(94, 78 + len(shared) * 4),
+        )
+        outgoing_counts[source] += 1
+
+    resource_groups: dict[str, list[ApiOperation]] = {}
+    for operation in ordered_operations:
+        resource_groups.setdefault(_graph_resource_key(operation.path), []).append(operation)
+    method_order = {"POST": 0, "GET": 1, "PUT": 2, "PATCH": 3, "DELETE": 4}
+    for resource, members in sorted(resource_groups.items()):
+        path_groups: dict[str, list[ApiOperation]] = {}
+        for operation in members:
+            path_groups.setdefault(_graph_path_shape(operation.path), []).append(operation)
+        for path_shape, path_members in sorted(path_groups.items()):
+            ranked = sorted(
+                path_members,
+                key=lambda item: (method_order.get(item.method, 9), item.operation_id),
+            )
+            for source, target in zip(ranked, ranked[1:]):
+                add_edge(
+                    source.operation_id,
+                    target.operation_id,
+                    "resource_relation",
+                    "structural",
+                    "同一资源",
+                    f"共享资源路径：{path_shape}",
+                    74,
+                )
+        collection_posts = [
+            item for item in members
+            if item.method == "POST" and _graph_path_shape(item.path).strip("/") == resource
+        ]
+        detail_members = [
+            item for item in members
+            if "{}" in _graph_path_shape(item.path) and item.method in {"GET", "PUT", "PATCH", "DELETE"}
+        ]
+        for source in collection_posts:
+            for target in detail_members[:6]:
+                add_edge(
+                    source.operation_id,
+                    target.operation_id,
+                    "resource_relation",
+                    "structural",
+                    "资源生命周期",
+                    f"创建接口与 {resource} 资源明细接口属于同一生命周期",
+                    82,
+                )
+
+    return sorted(
+        edges.values(),
+        key=lambda edge: (
+            GRAPH_KIND_ORDER.get(str(edge["kind"]), 9),
+            -int(edge["confidence"]),
+            str(edge["source"]),
+            str(edge["target"]),
+        ),
+    )
+
+
+def _graph_schema_fields(value: Any) -> set[str]:
+    """Collect normalized property and parameter names from a JSON schema fragment."""
+
+    fields: set[str] = set()
+    if isinstance(value, dict):
+        properties = value.get("properties")
+        if isinstance(properties, dict):
+            fields.update(_normalize_graph_field(str(name)) for name in properties)
+        if isinstance(value.get("name"), str) and "in" in value:
+            fields.add(_normalize_graph_field(str(value["name"])))
+        for child in value.values():
+            fields.update(_graph_schema_fields(child))
+    elif isinstance(value, list):
+        for child in value:
+            fields.update(_graph_schema_fields(child))
+    return {field for field in fields if field}
+
+
+def _normalize_graph_field(value: str) -> str:
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+
+def _graph_resource_key(path: str) -> str:
+    segments = [segment for segment in path.strip("/").split("/") if segment]
+    literal = next((segment for segment in segments if not segment.startswith("{")), "root")
+    return _normalize_graph_field(literal) or "root"
+
+
+def _graph_path_shape(path: str) -> str:
+    normalized = re.sub(r"\{[^}]+\}", "{}", path.rstrip("/"))
+    return normalized or "/"
 
 
 def checksum(content: bytes) -> str:

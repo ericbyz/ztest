@@ -278,6 +278,30 @@ class OperationView(BaseModel):
     readiness: int
 
 
+OperationRelationKind = Literal["scenario_flow", "schema_flow", "resource_relation"]
+
+
+class OperationGraphEdge(BaseModel):
+    """A traceable relationship between two API operations."""
+
+    id: str
+    source: str
+    target: str
+    kind: OperationRelationKind
+    basis: Literal["explicit", "inferred", "structural"]
+    label: str
+    evidence: str
+    confidence: int = Field(ge=0, le=100)
+
+
+class OperationGraphView(BaseModel):
+    """Project API operations plus evidence-backed relationships."""
+
+    nodes: list[OperationView]
+    edges: list[OperationGraphEdge]
+    groups: list[str]
+
+
 class ScenarioGenerate(BaseModel):
     """Scenario generation request."""
 

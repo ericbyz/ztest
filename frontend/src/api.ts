@@ -5,7 +5,7 @@ import type {
   KnowledgeBaseItem,
   LlmConfiguration,
   LlmConfigurationUpdate,
-  OperationItem,
+  OperationGraph,
   Project,
   RequirementItem,
   Run,
@@ -48,7 +48,8 @@ export const api = {
   documents: (projectId: string) => request<DocumentItem[]>(`/api/projects/${projectId}/documents`),
   requirements: (projectId: string) =>
     request<RequirementItem[]>(`/api/projects/${projectId}/requirements`),
-  operations: (projectId: string) => request<OperationItem[]>(`/api/projects/${projectId}/operations`),
+  operationGraph: (projectId: string) =>
+    request<OperationGraph>(`/api/projects/${projectId}/operation-graph`),
   scenarios: (projectId: string) => request<Scenario[]>(`/api/projects/${projectId}/scenarios`),
   environments: (projectId: string) =>
     request<EnvironmentItem[]>(`/api/projects/${projectId}/environments`),

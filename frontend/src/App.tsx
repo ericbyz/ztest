@@ -15,7 +15,7 @@ import { WorkflowEditor } from './components/WorkflowEditor'
 import { ApiView, ReportsView, RequirementsView } from './components/WorkspaceViews'
 import type {
   ApiSpecType, Dashboard, DocumentItem, EnvironmentItem, KnowledgeBaseItem,
-  LlmConfiguration, LlmConfigurationUpdate, NavKey, OperationItem, Project,
+  LlmConfiguration, LlmConfigurationUpdate, NavKey, OperationGraph, Project,
   McpServerCandidate, McpServerConfiguration, McpServerConfigurationUpdate,
   RequirementItem, Run, Scenario, SourceConnector, SourceConnectorCreate,
   TapdMcpConnect, TapdMcpProjects,
@@ -24,7 +24,7 @@ import type {
 interface ProjectData {
   documents: DocumentItem[]
   requirements: RequirementItem[]
-  operations: OperationItem[]
+  operationGraph: OperationGraph
   scenarios: Scenario[]
   environments: EnvironmentItem[]
   sources: SourceConnector[]
@@ -32,7 +32,7 @@ interface ProjectData {
 }
 
 const EMPTY_DATA: ProjectData = {
-  documents: [], requirements: [], operations: [], scenarios: [], environments: [],
+  documents: [], requirements: [], operationGraph: { nodes: [], edges: [], groups: [] }, scenarios: [], environments: [],
   sources: [], knowledgeBases: [],
 }
 const EMPTY_LLM_CONFIGURATION: LlmConfiguration = {
@@ -62,14 +62,14 @@ export default function App() {
   const loadProject = useCallback(async (projectId: string, showLoading = true) => {
     if (showLoading) setLoading(true)
     try {
-      const [dashboardResult, documents, requirements, operations, scenarios, environments, sources, knowledgeBases] = await Promise.all([
+      const [dashboardResult, documents, requirements, operationGraph, scenarios, environments, sources, knowledgeBases] = await Promise.all([
         api.dashboard(projectId), api.documents(projectId), api.requirements(projectId),
-        api.operations(projectId), api.scenarios(projectId), api.environments(projectId),
+        api.operationGraph(projectId), api.scenarios(projectId), api.environments(projectId),
         api.sources(projectId), api.knowledgeBases(projectId),
       ])
       setActiveProjectId(projectId)
       setDashboard(dashboardResult)
-      setData({ documents, requirements, operations, scenarios, environments, sources, knowledgeBases })
+      setData({ documents, requirements, operationGraph, scenarios, environments, sources, knowledgeBases })
       setSelectedScenarioId((current) => scenarios.some((item) => item.id === current) ? current : scenarios[0]?.id ?? '')
       setEnvironmentId((current) => environments.some((item) => item.id === current) ? current : environments.find((item) => item.is_default)?.id ?? environments[0]?.id ?? '')
     } catch (error) {
@@ -377,7 +377,7 @@ export default function App() {
           {nav === 'overview' ? <Overview dashboard={dashboard} data={data} onNavigate={setNav} onSelectRun={setSelectedRun} activeScenario={activeScenario} running={running} runMode={runMode} onModeChange={setRunMode} onRun={runScenario} onApprove={approveScenario} onSave={saveScenario} /> : null}
           {nav === 'documents' ? <SourceCenter documents={data.documents} sources={data.sources} knowledgeBases={data.knowledgeBases} onUploadRequirement={uploadRequirement} onUploadApi={uploadApi} onImportApiUrl={importApiUrl} onCreateSource={createSource} onSyncSource={syncSource} onDiscoverTapdMcp={discoverTapdMcp} onLoadTapdProjects={loadTapdProjects} onConnectTapdMcp={connectTapdMcp} onCreateKnowledgeBase={createKnowledgeBase} onUploadKnowledge={uploadKnowledge} onExtractKnowledge={extractKnowledge} /> : null}
           {nav === 'requirements' ? <RequirementsView requirements={data.requirements} onApprove={approveRequirement} onAnalyze={analyze} onGenerate={generateScenario} /> : null}
-          {nav === 'api' ? <ApiView operations={data.operations} /> : null}
+          {nav === 'api' ? <ApiView key={activeProjectId} graph={data.operationGraph} /> : null}
           {nav === 'scenarios' ? <ScenarioWorkspace scenarios={data.scenarios} activeScenario={activeScenario} selectedId={selectedScenarioId} onSelect={setSelectedScenarioId} running={running} runMode={runMode} onModeChange={setRunMode} onRun={runScenario} onApprove={approveScenario} onSave={saveScenario} onNavigate={setNav} /> : null}
           {nav === 'reports' ? <ReportsView runs={dashboard.recent_runs} projectId={dashboard.project.id} onSelect={setSelectedRun} /> : null}
           {nav === 'settings' ? <SettingsView key={llmConfiguration.updated_at ?? 'empty'} configuration={llmConfiguration} mcpServers={mcpServers} onSave={saveLlmConfiguration} onTest={testLlmConfiguration} onSaveMcp={saveMcpServer} onDeleteMcp={deleteMcpServer} onTestMcp={testMcpServer} onDiscoverMcp={() => discoverTapdMcp('')} /> : null}

@@ -376,19 +376,78 @@ td small { font-size: 10px; color: #566278; }
 .card-footer { border-top: 1px solid #edf0f4; padding-top: 10px; color: #7a8596; font-size: 10px; }
 .verified { color: #07885d; display: flex; align-items: center; gap: 4px; }
 
-.graph-surface { min-height: 600px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); position: relative; overflow: hidden; }
-.graph-surface::before { content: ""; position: absolute; inset: 48px 0 0; opacity: .45; background-image: radial-gradient(#c2cada .8px, transparent .8px); background-size: 16px 16px; }
-.graph-header { position: relative; z-index: 1; height: 49px; padding: 0 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; }
-.graph-header span { margin-left: auto; font-size: 10px; color: var(--muted); font-weight: 500; }
-.api-nodes { position: relative; z-index: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 22px 0; padding: 74px 45px; }
-.api-node-wrap { display: flex; align-items: center; }
-.api-node { width: 210px; min-height: 100px; padding: 13px; border: 1px solid #cfd8e7; border-top: 3px solid #3d73e5; border-radius: 6px; background: white; box-shadow: 0 7px 18px rgba(30,53,91,.08); }
-.api-node > div { display: flex; align-items: center; gap: 7px; }
-.api-node strong { font-size: 11px; }
-.api-node p { color: #657289; font: 9px "Cascadia Code", monospace; }
-.api-node footer { display: flex; justify-content: space-between; align-items: end; font-size: 9px; color: #758096; }
-.api-node footer b { width: 28px; height: 28px; display: grid; place-items: center; background: #e6f7ef; color: #07895d; border-radius: 50%; font-size: 10px; }
-.api-arrow { color: #5273a7; margin: 0 9px; }
+.api-graph-view { max-width: 1320px; margin: 0 auto; }
+.api-graph-overview { margin-bottom: 12px; display: grid; grid-template-columns: repeat(3, minmax(120px, .55fr)) minmax(260px, 1.25fr); gap: 10px; }
+.api-graph-metric, .api-graph-principle { min-height: 70px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: white; display: flex; align-items: center; gap: 10px; }
+.api-graph-metric > svg { color: #2465d8; }
+.api-graph-metric strong, .api-graph-metric small, .api-graph-principle strong, .api-graph-principle small { display: block; }
+.api-graph-metric strong { color: #25344a; font-size: 19px; }
+.api-graph-metric small { margin-top: 2px; color: #7a8798; font-size: 9px; }
+.api-graph-principle { border-color: #c7e4d8; color: #087554; background: #f1faf6; }
+.api-graph-principle small { margin-top: 4px; color: #5f7c72; font-size: 9px; }
+.api-graph-controls { padding: 12px; border: 1px solid var(--line); border-radius: 8px 8px 0 0; background: white; display: grid; grid-template-columns: minmax(220px, 1fr) 160px minmax(220px, .8fr); align-items: end; gap: 10px; }
+.api-graph-controls label { display: grid; gap: 5px; color: #5c6a7f; font-size: 9px; font-weight: 700; }
+.api-graph-controls input, .api-graph-controls select { width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid #d7dfea; border-radius: 6px; color: #26364d; background: white; font-size: 10px; }
+.api-graph-search { position: relative; }
+.api-graph-search svg { position: absolute; z-index: 1; left: 10px; bottom: 10px; color: #7b8799; }
+.api-graph-search input { padding-left: 32px; }
+.relation-filters { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.relation-filters button { min-height: 30px; padding: 5px 10px; border: 1px solid #d9e1ec; border-radius: 999px; color: #68758a; background: #fafbfd; font-size: 9px; cursor: pointer; }
+.relation-filters button.active { border-color: #7ea5ef; color: #164fac; background: #edf4ff; }
+.api-graph-legend { padding: 9px 13px; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 8px 8px; background: #f9fafc; display: flex; flex-wrap: wrap; gap: 15px; }
+.api-graph-legend > span { display: flex; align-items: center; gap: 5px; color: #4f5f76; font-size: 9px; }
+.api-graph-legend i { width: 22px; height: 3px; border-radius: 2px; background: #7057d5; }
+.api-graph-legend small { color: #8a94a4; }
+.api-graph-legend .legend-schema_flow i { background: #168c8d; }
+.api-graph-legend .legend-resource_relation i { height: 0; border-top: 2px dashed #7990ad; background: transparent; }
+.api-graph-layout { margin-top: 12px; display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; gap: 12px; }
+.api-graph-stage-shell, .api-relation-inspector { border: 1px solid var(--line); border-radius: 8px; background: white; overflow: hidden; }
+.api-graph-stage-shell { overflow-x: auto; }
+.api-graph-stage-shell > header { min-height: 48px; padding: 9px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.api-graph-stage-shell > header div { display: flex; align-items: center; gap: 7px; color: #34455e; }
+.api-graph-stage-shell > header span { color: #8490a1; font-size: 9px; }
+.api-graph-stage { position: relative; min-width: 980px; overflow: hidden; background-color: #fbfcfe; background-image: radial-gradient(#c7d0de .7px, transparent .7px); background-size: 17px 17px; }
+.api-graph-stage svg { position: absolute; inset: 0; width: 980px; height: 100%; overflow: visible; }
+.api-graph-edge path { fill: none; stroke: #7057d5; stroke-width: 2.2; opacity: .8; }
+.api-graph-edge text { fill: #624eb2; font-size: 9px; font-weight: 700; text-anchor: middle; paint-order: stroke; stroke: #fbfcfe; stroke-width: 4px; }
+.api-graph-edge.edge-schema_flow path { stroke: #168c8d; }
+.api-graph-edge.edge-schema_flow text { fill: #117878; }
+.api-graph-edge.edge-resource_relation path { stroke: #7990ad; stroke-width: 1.7; stroke-dasharray: 6 5; }
+.api-graph-edge.edge-resource_relation text { fill: #62758e; }
+#api-arrow-explicit path { fill: #7057d5; }
+#api-arrow-inferred path { fill: #168c8d; }
+.api-graph-node { position: absolute; width: 214px; min-height: 94px; padding: 11px; border: 1px solid #ccd7e6; border-top: 3px solid #5680dd; border-radius: 7px; color: #33435b; background: white; box-shadow: 0 6px 14px rgba(31,51,84,.08); text-align: left; cursor: pointer; }
+.api-graph-node:hover, .api-graph-node:focus-visible { border-color: #7098ec; box-shadow: 0 0 0 3px rgba(41,100,220,.1); outline: 0; }
+.api-graph-node.selected { border-color: #2b69df; border-top-color: #175ed8; background: #f3f7ff; box-shadow: 0 0 0 3px rgba(41,100,220,.12), 0 8px 18px rgba(31,71,145,.12); }
+.api-graph-node > div { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.api-graph-node strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.api-graph-node code { display: block; margin: 9px 0; overflow: hidden; color: #5d6e84; font: 9px "Cascadia Code", monospace; text-overflow: ellipsis; white-space: nowrap; }
+.api-graph-node footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #718096; font-size: 8px; }
+.api-graph-node footer span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-graph-node footer b { min-width: 25px; height: 25px; border-radius: 50%; display: grid; place-items: center; color: #087554; background: #e1f5ed; }
+.api-graph-empty { min-height: 430px; display: grid; place-content: center; justify-items: center; padding: 30px; color: #718096; text-align: center; background: #fbfcfe; }
+.api-graph-empty strong { margin-top: 10px; color: #41516a; }
+.api-graph-empty p { max-width: 380px; margin: 6px 0 0; font-size: 10px; line-height: 1.6; }
+.api-relation-inspector > header { min-height: 57px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: #f8faff; }
+.api-relation-inspector > header span, .api-relation-inspector > header strong { display: block; }
+.api-relation-inspector > header span { color: #7c899c; font-size: 9px; }
+.api-relation-inspector > header strong { margin-top: 4px; overflow-wrap: anywhere; font-size: 11px; }
+.selected-operation { padding: 13px 14px; border-bottom: 1px solid var(--line); }
+.selected-operation > div { display: flex; align-items: center; gap: 7px; }
+.selected-operation code { color: #53667f; font: 9px "Cascadia Code", monospace; overflow-wrap: anywhere; }
+.selected-operation p { margin: 9px 0 6px; color: #475970; font-size: 10px; line-height: 1.5; }
+.selected-operation small { color: #7d899a; font-size: 8px; }
+.api-relation-list { max-height: 590px; padding: 9px; overflow-y: auto; display: grid; gap: 7px; }
+.relation-card { padding: 10px; border: 1px solid #dde4ee; border-left: 3px solid #7057d5; border-radius: 6px; background: #fff; }
+.relation-card.relation-schema_flow { border-left-color: #168c8d; }
+.relation-card.relation-resource_relation { border-left-color: #7990ad; }
+.relation-card > div { display: flex; align-items: center; justify-content: space-between; color: #5a4aa1; font-size: 8px; font-weight: 700; }
+.relation-card.relation-schema_flow > div { color: #117878; }
+.relation-card.relation-resource_relation > div { color: #62758e; }
+.relation-card button { display: block; width: 100%; margin: 7px 0; padding: 0; border: 0; color: #2459b5; background: none; overflow-wrap: anywhere; text-align: left; font-size: 10px; font-weight: 700; cursor: pointer; }
+.relation-card p { margin: 0; color: #5d6b80; font-size: 9px; line-height: 1.55; }
+.relation-card small { display: block; margin-top: 6px; color: #929baa; font-size: 8px; }
+.api-relation-empty { margin: 0; padding: 20px 12px; color: #7b8798; font-size: 10px; line-height: 1.6; text-align: center; }
 
 .report-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; }
 .report-card { border: 1px solid var(--line); border-radius: var(--radius); background: white; min-height: 96px; padding: 14px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; text-align: left; cursor: pointer; }
@@ -547,8 +606,13 @@ td small { font-size: 10px; color: #566278; }
   .view-actions { width: 100%; }
   .list-card { padding: 13px; }
   .list-card > .status { display: none; }
-  .graph-surface { min-height: 500px; overflow: auto; }
-  .api-nodes { min-width: 900px; flex-wrap: nowrap; padding: 80px 25px; }
+  .api-graph-overview { grid-template-columns: 1fr 1fr; }
+  .api-graph-principle { grid-column: span 2; }
+  .api-graph-controls { grid-template-columns: 1fr 1fr; }
+  .api-graph-search { grid-column: span 2; }
+  .api-graph-layout { grid-template-columns: 1fr; }
+  .api-graph-stage-shell { display: none; }
+  .api-relation-list { max-height: none; }
   .toast { right: 12px; bottom: 12px; left: 12px; }
 }
 

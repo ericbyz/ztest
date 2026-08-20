@@ -99,6 +99,15 @@ def test_dashboard_and_simulated_run() -> None:
             assert run.status_code == 200
             assert run.json()["status"] == "passed"
             assert len(run.json()["result"]["steps"]) == 3
+            graph = client.get(f"/api/projects/{project_id}/operation-graph")
+            assert graph.status_code == 200
+            assert len(graph.json()["nodes"]) == 3
+            assert "组件" in graph.json()["groups"]
+            assert any(edge["kind"] == "scenario_flow" for edge in graph.json()["edges"])
+            assert all(edge["evidence"] for edge in graph.json()["edges"])
+            assert {edge["basis"] for edge in graph.json()["edges"]} <= {
+                "explicit", "inferred", "structural"
+            }
         finally:
             remove_project(project_id)
 

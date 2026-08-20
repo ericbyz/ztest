@@ -3,7 +3,15 @@
 import pytest
 
 from app.security import UnsafeTargetError, validate_target
-from app.services import normalize_operations, parse_api_document, parse_openapi, validate_ir
+from app.models import ApiOperation, Scenario
+from app.services import (
+    derive_operation_relationships,
+    dumps,
+    normalize_operations,
+    parse_api_document,
+    parse_openapi,
+    validate_ir,
+)
 
 
 def valid_ir() -> dict:
@@ -116,3 +124,61 @@ def test_postman_and_har_are_normalized() -> None:
     assert har_kind == "har"
     assert har_operations[0].method == "POST"
     assert har_operations[0].response_schema_json == '{"schema": {}, "status": "201"}'
+
+
+def test_operation_relationships_are_traceable_and_deterministic() -> None:
+    """Only create graph edges that carry concrete scenario, schema, or resource evidence."""
+
+    create = ApiOperation(
+        id="op_create",
+        operation_id="createWidget",
+        project_id="project",
+        method="POST",
+        path="/widgets",
+        tags_json=dumps(["widgets"]),
+        request_schema_json=dumps({"body": {"properties": {"title": {"type": "string"}}}}),
+        response_schema_json=dumps({"schema": {"properties": {"widget_id": {"type": "string"}}}}),
+    )
+    get = ApiOperation(
+        id="op_get",
+        operation_id="getWidget",
+        project_id="project",
+        method="GET",
+        path="/widgets/{widget_id}",
+        tags_json=dumps(["widgets"]),
+        request_schema_json=dumps({"parameters": [{"name": "widget_id", "in": "path"}]}),
+        response_schema_json=dumps({"schema": {"properties": {"widget_id": {"type": "string"}}}}),
+    )
+    remove = ApiOperation(
+        id="op_delete",
+        operation_id="deleteWidget",
+        project_id="project",
+        method="DELETE",
+        path="/widgets/{widget_id}",
+        tags_json=dumps(["widgets"]),
+        request_schema_json=dumps({"parameters": [{"name": "widget_id", "in": "path"}]}),
+        response_schema_json=dumps({}),
+    )
+    scenario = Scenario(
+        id="scenario",
+        project_id="project",
+        name="组件生命周期",
+        ir_json=dumps({"steps": [
+            {"operation_id": "createWidget"},
+            {"operation_id": "getWidget"},
+            {"operation_id": "deleteWidget"},
+        ]}),
+    )
+
+    edges = derive_operation_relationships([create, get, remove], [scenario])
+
+    assert any(
+        edge["kind"] == "scenario_flow"
+        and edge["source"] == "createWidget"
+        and edge["target"] == "getWidget"
+        and "组件生命周期" in edge["evidence"]
+        for edge in edges
+    )
+    assert any(edge["kind"] == "schema_flow" and "widget_id" in edge["evidence"] for edge in edges)
+    assert any(edge["kind"] == "resource_relation" and edge["confidence"] == 82 for edge in edges)
+    assert edges == derive_operation_relationships([create, get, remove], [scenario])
