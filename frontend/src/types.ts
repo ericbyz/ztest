@@ -150,6 +150,29 @@ export interface McpServerCandidate {
   error: string
 }
 
+export interface McpServerConfiguration {
+  id: string
+  name: string
+  endpoint_url: string
+  transport: 'streamable_http'
+  auth_type: 'none' | 'bearer' | 'api_key'
+  auth_header: string
+  enabled: boolean
+  has_secret: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface McpServerConfigurationUpdate {
+  name: string
+  endpoint_url: string
+  transport: 'streamable_http'
+  auth_type: McpServerConfiguration['auth_type']
+  auth_header: string
+  secret?: string
+  enabled: boolean
+}
+
 export interface TapdMcpProject {
   id: string
   name: string

@@ -114,6 +114,63 @@ def test_source_connector_never_returns_secret(tmp_path, monkeypatch) -> None:
             session.commit()
 
 
+def test_managed_mcp_configuration_is_local_only_and_testable(tmp_path, monkeypatch) -> None:
+    """Manage MCP metadata locally while keeping its credential write-only."""
+
+    monkeypatch.setattr(local_store, "LOCAL_DATA_ROOT", tmp_path)
+    monkeypatch.setattr(local_store, "SECRETS_PATH", tmp_path / "secrets.json")
+    monkeypatch.setattr(local_store, "MCP_SERVERS_PATH", tmp_path / "mcp_servers.json")
+    monkeypatch.setattr(
+        api_module,
+        "inspect_server",
+        lambda endpoint_url, timeout=8.0: {
+            "endpoint_url": endpoint_url,
+            "transport": "streamable_http",
+            "connectable": True,
+            "tapd_capable": True,
+            "tools": ["list_tapd_projects", "list_tapd_stories"],
+            "project_tool": "list_tapd_projects",
+            "requirement_tool": "list_tapd_stories",
+            "error": "",
+        },
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/mcp/servers",
+            json={
+                "name": "局域网 TAPD",
+                "endpoint_url": "http://10.18.15.11:8111/mcp",
+                "auth_type": "bearer",
+                "secret": "mcp-private-token",
+                "enabled": True,
+            },
+        )
+        assert created.status_code == 201
+        server_id = created.json()["id"]
+        assert created.json()["has_secret"] is True
+        assert "mcp-private-token" not in created.text
+        assert "mcp-private-token" not in (tmp_path / "mcp_servers.json").read_text(
+            encoding="utf-8"
+        )
+        assert "mcp-private-token" in (tmp_path / "secrets.json").read_text(encoding="utf-8")
+
+        listed = client.get("/api/mcp/servers")
+        assert listed.status_code == 200
+        assert listed.json()[0]["endpoint_url"] == "http://10.18.15.11:8111/mcp"
+        assert "mcp-private-token" not in listed.text
+
+        tested = client.post(f"/api/mcp/servers/{server_id}:test")
+        assert tested.status_code == 200
+        assert tested.json()["connectable"] is True
+        assert tested.json()["tapd_capable"] is True
+
+        deleted = client.delete(f"/api/mcp/servers/{server_id}")
+        assert deleted.status_code == 200
+        assert client.get("/api/mcp/servers").json() == []
+        assert "mcp-private-token" not in (tmp_path / "secrets.json").read_text(encoding="utf-8")
+
+
 def test_tapd_mcp_project_selection_and_sync(monkeypatch) -> None:
     """Bind a user-selected TAPD project and scope the MCP story read to its ID."""
 

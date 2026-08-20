@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
@@ -17,6 +18,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+
+from .local_store import get_secret, read_mcp_servers
 
 
 PROTOCOL_VERSION = "2025-03-26"
@@ -71,7 +74,7 @@ def _validate_http_mcp_url(url: str, *, allow_remote: bool) -> str:
     if parsed.scheme not in {"http", "https"}:
         raise McpError("MCP 地址必须使用 http:// 或 https://")
     hostname = (parsed.hostname or "").lower()
-    if hostname not in LOOPBACK_HOSTS and (not allow_remote or parsed.scheme != "https"):
+    if hostname not in LOOPBACK_HOSTS and not allow_remote:
         raise McpError("手工 MCP 地址仅允许本机回环地址；远程地址必须来自本机 MCP 配置")
     if parsed.username or parsed.password:
         raise McpError("MCP 地址不能包含用户名或密码")
@@ -90,6 +93,12 @@ def validate_local_mcp_url(url: str) -> str:
     """Accept an explicit loopback HTTP endpoint and reject all remote targets."""
 
     return _validate_http_mcp_url(url, allow_remote=False)
+
+
+def validate_managed_mcp_url(url: str) -> str:
+    """Validate an explicitly user-managed MCP endpoint before local registration."""
+
+    return _validate_http_mcp_url(url, allow_remote=True)
 
 
 def validate_registered_mcp_url(url: str) -> str:
@@ -445,6 +454,28 @@ def _config_headers(config: dict[str, Any]) -> dict[str, str]:
     return headers
 
 
+def _stdio_proxy_headers(config: dict[str, Any]) -> dict[str, str]:
+    """Resolve common stdio-to-HTTP proxy auth flags without exposing arguments."""
+
+    headers = _config_headers(config)
+    arguments = config.get("args", [])
+    if not isinstance(arguments, list):
+        return headers
+    values = [str(item) for item in arguments]
+    for index, value in enumerate(values[:-1]):
+        flag = value.lower()
+        secret = values[index + 1].strip()
+        if not secret or secret.startswith("-"):
+            continue
+        if flag in {"--token", "--bearer-token", "--access-token"}:
+            headers.setdefault("Authorization", f"Bearer {secret}")
+        elif flag in {"--header", "-h"} and ":" in secret:
+            name, header_value = secret.split(":", 1)
+            if name.strip() and header_value.strip():
+                headers.setdefault(name.strip(), header_value.strip())
+    return headers
+
+
 def _append_config_mapping(
     mapping: dict[str, Any],
     source_name: str,
@@ -471,7 +502,60 @@ def _append_config_mapping(
                 )
             )
         elif config.get("command"):
-            stdio_names.append(display_name)
+            arguments = config.get("args", [])
+            is_http_proxy = isinstance(arguments, list) and any(
+                "mcp-remote" in str(argument).lower() for argument in arguments
+            )
+            argument_url = next(
+                (
+                    match.group(0)
+                    for argument in arguments if is_http_proxy
+                    for match in [re.search(r"https?://[^\s\"']+", str(argument))]
+                    if match
+                ),
+                "",
+            )
+            if argument_url:
+                try:
+                    normalized = _validate_http_mcp_url(argument_url, allow_remote=True)
+                except McpError:
+                    stdio_names.append(display_name)
+                else:
+                    http_servers.append(
+                        McpServerConfig(
+                            name=f"{display_name} · 代理地址",
+                            url=normalized,
+                            headers=_stdio_proxy_headers(config),
+                        )
+                    )
+            else:
+                stdio_names.append(display_name)
+
+
+def _managed_server_candidates() -> list[McpServerConfig]:
+    """Resolve enabled local MCP registrations and their write-only credentials."""
+
+    servers: list[McpServerConfig] = []
+    for item in read_mcp_servers():
+        if item.get("enabled") is False:
+            continue
+        server_id = str(item.get("id", ""))
+        name = str(item.get("name", "")).strip()
+        url = str(item.get("endpoint_url", "")).strip()
+        if not server_id or not name or not url:
+            continue
+        try:
+            normalized = _validate_http_mcp_url(url, allow_remote=True)
+        except McpError:
+            continue
+        headers: dict[str, str] = {}
+        secret = get_secret(f"mcp:{server_id}")
+        auth_type = str(item.get("auth_type", "none"))
+        auth_header = str(item.get("auth_header", "Authorization")).strip()
+        if secret and auth_type != "none" and auth_header:
+            headers[auth_header] = f"Bearer {secret}" if auth_type == "bearer" else secret
+        servers.append(McpServerConfig(name=f"本地配置 · {name}", url=normalized, headers=headers))
+    return servers
 
 
 def _config_candidates() -> tuple[list[McpServerConfig], list[str]]:
@@ -482,13 +566,14 @@ def _config_candidates() -> tuple[list[McpServerConfig], list[str]]:
     app_data = Path(os.getenv("APPDATA", user_home / "AppData" / "Roaming"))
     json_paths = (
         (repo_root / ".mcp.json", "项目配置"),
+        (user_home / ".claude.json", "Claude Code"),
         (repo_root / ".cursor" / "mcp.json", "项目 Cursor"),
         (user_home / ".cursor" / "mcp.json", "Cursor"),
         (app_data / "Claude" / "claude_desktop_config.json", "Claude"),
         (app_data / "Code" / "User" / "mcp.json", "VS Code"),
         (app_data / "Cursor" / "User" / "mcp.json", "Cursor"),
     )
-    http_servers: list[McpServerConfig] = []
+    http_servers: list[McpServerConfig] = _managed_server_candidates()
     stdio_names: list[str] = []
     for path, source_name in json_paths:
         if not path.is_file():
@@ -502,6 +587,10 @@ def _config_candidates() -> tuple[list[McpServerConfig], list[str]]:
             for key in ("mcpServers", "servers"):
                 if isinstance(document.get(key), dict):
                     mappings.append(document[key])
+            if path == user_home / ".claude.json" and isinstance(document.get("projects"), dict):
+                for project in document["projects"].values():
+                    if isinstance(project, dict) and isinstance(project.get("mcpServers"), dict):
+                        mappings.append(project["mcpServers"])
         for mapping in mappings:
             _append_config_mapping(mapping, source_name, http_servers, stdio_names)
 
@@ -518,14 +607,12 @@ def _config_candidates() -> tuple[list[McpServerConfig], list[str]]:
 
 
 def discover_local_servers(manual_url: str = "") -> list[dict[str, Any]]:
-    """Probe a small allowlist of local endpoints and known URL-based MCP configs."""
+    """Probe local endpoints and every trusted URL-based MCP registration."""
 
     configured, stdio_names = _config_candidates()
     candidates: list[tuple[str, str, bool]] = []
     for server in configured:
-        hostname = (urlparse(server.url).hostname or "").lower()
-        if hostname in LOOPBACK_HOSTS or "tapd" in server.name.lower():
-            candidates.append((server.name, server.url, True))
+        candidates.append((server.name, server.url, True))
     if manual_url:
         candidates.insert(0, ("手工地址", validate_local_mcp_url(manual_url), False))
     env_urls = [
@@ -575,7 +662,7 @@ def discover_local_servers(manual_url: str = "") -> list[dict[str, Any]]:
 
     with ThreadPoolExecutor(max_workers=min(8, max(1, len(unique)))) as executor:
         results = [result for result in executor.map(probe, unique.items()) if result]
-    for name in (item for item in stdio_names if "tapd" in item.lower()):
+    for name in stdio_names:
         results.append(
             {
                 "name": name,

@@ -222,7 +222,7 @@ export function SourceCenter(props: SourceCenterProps) {
                       type="button"
                     >
                       <span className="mcp-server-icon"><Server size={17} /></span>
-                      <span><strong>{server.name}</strong><small>{server.endpoint_url || 'stdio MCP 配置'}</small></span>
+                      <span><strong>{server.name}</strong><small>{displayMcpEndpoint(server.endpoint_url)}</small></span>
                       <span className={server.tapd_capable ? 'mcp-ready' : 'mcp-unavailable'}>{server.tapd_capable ? 'TAPD 可用' : server.error}</span>
                     </button>
                   ))}
@@ -371,4 +371,16 @@ function sourceLabel(sourceType: string): string {
     component_knowledge: '组件知识库',
     api_url: 'HTTPS URL',
   }[sourceType] ?? sourceType
+}
+
+function displayMcpEndpoint(endpointUrl: string): string {
+  if (!endpointUrl) return 'stdio MCP 配置'
+  try {
+    const endpoint = new URL(endpointUrl)
+    return ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname)
+      ? endpointUrl
+      : endpoint.origin
+  } catch {
+    return 'MCP 地址格式无效'
+  }
 }

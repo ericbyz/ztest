@@ -236,7 +236,7 @@ td small { font-size: 10px; color: #566278; }
 .section-title strong { color: #2a3850; font-size: 13px; }
 .section-title p { margin: 4px 0 0; color: #7a8698; font-size: 10px; }
 .connector-editor { margin-top: 16px; padding: 17px; border: 1px solid #cbdaf5; border-radius: 8px; background: #f7faff; }
-.connector-editor input, .connector-editor select, .api-import-panel input, .api-import-panel select, .knowledge-create input, .knowledge-create textarea, .settings-form input { width: 100%; min-height: 37px; padding: 8px 10px; border: 1px solid #d7dfea; border-radius: 6px; color: #26364d; background: white; font-size: 11px; }
+.connector-editor input, .connector-editor select, .api-import-panel input, .api-import-panel select, .knowledge-create input, .knowledge-create textarea, .settings-form input, .mcp-config-editor input, .mcp-config-editor select { width: 100%; min-height: 37px; padding: 8px 10px; border: 1px solid #d7dfea; border-radius: 6px; color: #26364d; background: white; font-size: 11px; }
 .connector-editor label, .api-import-panel label, .knowledge-create label, .settings-form label { display: grid; gap: 6px; color: #48566c; font-size: 10px; font-weight: 650; }
 .mcp-editor { display: grid; gap: 14px; }
 .mcp-discovery-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 10px; }
@@ -290,6 +290,7 @@ td small { font-size: 10px; color: #566278; }
 
 .settings-view { max-width: 1120px; margin: 0 auto; }
 .settings-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, .65fr); gap: 16px; }
+.settings-main-stack { display: grid; gap: 16px; min-width: 0; }
 .settings-panel, .security-panel { border: 1px solid var(--line); border-radius: var(--radius); background: white; }
 .settings-panel { padding: 22px; }
 .settings-panel-title { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding-bottom: 18px; border-bottom: 1px solid #e8ecf2; }
@@ -308,6 +309,33 @@ td small { font-size: 10px; color: #566278; }
 .clear-secret { display: flex !important; grid-template-columns: auto 1fr; align-items: center; }
 .clear-secret input { width: auto; min-height: auto; accent-color: #b93c48; }
 .settings-panel > footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid #e8ecf2; }
+.mcp-settings-panel { display: grid; gap: 16px; }
+.mcp-toolbar { display: flex; align-items: center; gap: 10px; }
+.mcp-toolbar > span { color: #748096; font-size: 9px; line-height: 1.5; }
+.mcp-config-list, .mcp-discovered { display: grid; gap: 8px; }
+.mcp-discovered { padding: 12px; border: 1px solid #dce6f4; border-radius: 8px; background: #f8faff; }
+.mcp-discovered > strong { color: #465773; font-size: 10px; }
+.mcp-config-row { min-width: 0; padding: 11px 0; border-top: 1px solid #e7ebf1; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; }
+.mcp-config-row:first-child { border-top: 0; }
+.mcp-config-row.compact { padding: 8px; border: 0; border-radius: 6px; grid-template-columns: auto minmax(0,1fr) minmax(90px, auto) auto; background: white; }
+.mcp-config-row strong, .mcp-config-row b { display: block; color: #34435a; font-size: 11px; }
+.mcp-config-row p, .mcp-config-row small { display: block; margin: 3px 0 0; color: #78869a; font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
+.connection-dot { width: 9px; height: 9px; border-radius: 50%; background: #aeb8c7; box-shadow: 0 0 0 3px #eef1f5; }
+.connection-dot.ready { background: #11a675; box-shadow: 0 0 0 3px #dcf5ec; }
+.connection-dot.failed { background: #d96642; box-shadow: 0 0 0 3px #fbe8e1; }
+.connection-dot.disabled { background: #c4c9d1; box-shadow: none; }
+.mcp-row-actions { display: flex; align-items: center; gap: 4px; }
+.icon-button.danger { color: #a84945; }
+.icon-button.danger:hover { color: #90352f; background: #fff0ee; }
+.mcp-empty { min-height: 92px; padding: 18px; border: 1px dashed #ced8e6; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 11px; color: #6f7d92; background: #fbfcfe; }
+.mcp-empty strong { color: #43536a; font-size: 11px; }
+.mcp-empty p { margin: 4px 0 0; font-size: 9px; }
+.mcp-config-editor { padding: 15px; border: 1px solid #cadbf8; border-radius: 8px; background: #f7faff; }
+.mcp-config-editor > header { margin-bottom: 14px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.mcp-config-editor > header strong { color: #35465f; font-size: 12px; }
+.mcp-config-editor > header p { margin: 4px 0 0; color: #77849a; font-size: 9px; }
+.mcp-config-editor label { display: grid; gap: 6px; margin-bottom: 14px; color: #46536a; font-size: 10px; font-weight: 650; }
+.mcp-config-editor > footer { display: flex; justify-content: flex-end; gap: 8px; }
 .security-panel { padding: 23px; color: #47566d; background: linear-gradient(155deg, #f4f8ff, #f7fbf9); }
 .security-panel > svg { color: #1763da; }
 .security-panel h2 { margin-top: 13px; }
@@ -501,6 +529,8 @@ td small { font-size: 10px; color: #566278; }
   .mcp-server { grid-template-columns: auto minmax(0,1fr); }
   .mcp-server > .mcp-ready, .mcp-server > .mcp-unavailable { grid-column: 2; max-width: none; text-align: left; }
   .source-row > .secret-ok, .source-row > .secret-missing { display: none; }
+  .mcp-config-row.compact { grid-template-columns: auto minmax(0,1fr) auto; }
+  .mcp-config-row.compact > .mcp-ready, .mcp-config-row.compact > .mcp-unavailable { grid-column: 2; max-width: none; text-align: left; }
   .local-security { align-self: stretch; justify-content: center; }
   .view-header { gap: 12px; flex-direction: column; }
   .view-actions { width: 100%; }
@@ -529,6 +559,10 @@ td small { font-size: 10px; color: #566278; }
   .asset-kind { display: none; }
   .settings-panel-title { grid-template-columns: auto 1fr; }
   .switch-row { grid-column: span 2; }
+  .mcp-settings-panel .settings-panel-title > .button { grid-column: span 2; justify-self: start; }
+  .mcp-toolbar { align-items: flex-start; flex-direction: column; }
+  .mcp-config-row { grid-template-columns: auto minmax(0,1fr); }
+  .mcp-row-actions { grid-column: 2; justify-content: flex-start; }
   .standalone-settings { padding: 14px; }
   .workflow-title .saved { display: none; }
 }

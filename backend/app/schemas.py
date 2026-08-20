@@ -132,6 +132,33 @@ class McpServerView(BaseModel):
     error: str
 
 
+class McpServerConfiguration(BaseModel):
+    """Write-only-secret configuration for a user-managed HTTP MCP server."""
+
+    name: str = Field(min_length=2, max_length=160)
+    endpoint_url: str = Field(min_length=8, max_length=500)
+    transport: Literal["streamable_http"] = "streamable_http"
+    auth_type: Literal["none", "bearer", "api_key"] = "none"
+    auth_header: str = Field(default="Authorization", max_length=120)
+    secret: SecretStr | None = None
+    enabled: bool = True
+
+
+class McpServerConfigurationView(BaseModel):
+    """Sanitized managed MCP metadata returned to the browser."""
+
+    id: str
+    name: str
+    endpoint_url: str
+    transport: Literal["streamable_http"]
+    auth_type: Literal["none", "bearer", "api_key"]
+    auth_header: str
+    enabled: bool
+    has_secret: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class TapdMcpProjectView(BaseModel):
     """A selectable TAPD workspace/project exposed by the local MCP server."""
 

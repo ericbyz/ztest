@@ -16,7 +16,8 @@ import { ApiView, ReportsView, RequirementsView } from './components/WorkspaceVi
 import type {
   ApiSpecType, Dashboard, DocumentItem, EnvironmentItem, KnowledgeBaseItem,
   LlmConfiguration, LlmConfigurationUpdate, NavKey, OperationItem, Project,
-  McpServerCandidate, RequirementItem, Run, Scenario, SourceConnector, SourceConnectorCreate,
+  McpServerCandidate, McpServerConfiguration, McpServerConfigurationUpdate,
+  RequirementItem, Run, Scenario, SourceConnector, SourceConnectorCreate,
   TapdMcpConnect, TapdMcpProjects,
 } from './types'
 
@@ -46,6 +47,7 @@ export default function App() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
   const [data, setData] = useState<ProjectData>(EMPTY_DATA)
   const [llmConfiguration, setLlmConfiguration] = useState<LlmConfiguration>(EMPTY_LLM_CONFIGURATION)
+  const [mcpServers, setMcpServers] = useState<McpServerConfiguration[]>([])
   const [selectedScenarioId, setSelectedScenarioId] = useState('')
   const [environmentId, setEnvironmentId] = useState('')
   const [runMode, setRunMode] = useState<'simulated' | 'live'>('simulated')
@@ -80,9 +82,12 @@ export default function App() {
   const bootstrap = useCallback(async () => {
     setLoading(true)
     try {
-      const [projectRows, llm] = await Promise.all([api.projects(), api.llmConfiguration()])
+      const [projectRows, llm, managedMcpServers] = await Promise.all([
+        api.projects(), api.llmConfiguration(), api.mcpServers(),
+      ])
       setProjects(projectRows)
       setLlmConfiguration(llm)
+      setMcpServers(managedMcpServers)
       if (projectRows.length > 0) await loadProject(projectRows[0].id)
       else setLoading(false)
     } catch (error) {
@@ -240,6 +245,43 @@ export default function App() {
     }
   }
 
+  const saveMcpServer = async (
+    serverId: string | null,
+    payload: McpServerConfigurationUpdate,
+  ) => {
+    try {
+      if (serverId) await api.updateMcpServer(serverId, payload)
+      else await api.createMcpServer(payload)
+      setMcpServers(await api.mcpServers())
+      setToast(`MCP Server 已${serverId ? '更新' : '添加'}，凭据仅保存在本机`)
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'MCP 配置保存失败')
+      throw error
+    }
+  }
+
+  const deleteMcpServer = async (serverId: string) => {
+    try {
+      await api.deleteMcpServer(serverId)
+      setMcpServers((current) => current.filter((item) => item.id !== serverId))
+      setToast('MCP Server 及其本地凭据已删除')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'MCP Server 删除失败')
+      throw error
+    }
+  }
+
+  const testMcpServer = async (serverId: string): Promise<McpServerCandidate> => {
+    try {
+      const result = await api.testMcpServer(serverId)
+      setToast(result.connectable ? `MCP 连接成功，发现 ${result.tools.length} 个工具` : `MCP 连接失败：${result.error}`)
+      return result
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'MCP 连接测试失败')
+      throw error
+    }
+  }
+
   const analyze = async () => {
     if (!activeProjectId) return
     try {
@@ -309,7 +351,7 @@ export default function App() {
   }
 
   if (loading) return <div className="loading-screen"><div className="loading-mark">AI</div><p>正在加载测试工作区…</p></div>
-  if (!dashboard && nav === 'settings') return <main className="standalone-settings"><button className="button secondary" onClick={() => setNav('overview')} type="button">返回首页</button><SettingsView key={llmConfiguration.updated_at ?? 'empty'} configuration={llmConfiguration} onSave={saveLlmConfiguration} onTest={testLlmConfiguration} />{toast ? <Toast message={toast} /> : null}</main>
+  if (!dashboard && nav === 'settings') return <main className="standalone-settings"><button className="button secondary" onClick={() => setNav('overview')} type="button">返回首页</button><SettingsView key={llmConfiguration.updated_at ?? 'empty'} configuration={llmConfiguration} mcpServers={mcpServers} onSave={saveLlmConfiguration} onTest={testLlmConfiguration} onSaveMcp={saveMcpServer} onDeleteMcp={deleteMcpServer} onTestMcp={testMcpServer} onDiscoverMcp={() => discoverTapdMcp('')} />{toast ? <Toast message={toast} /> : null}</main>
   if (!dashboard) return <><EmptyWorkspace onCreate={() => setProjectModalOpen(true)} onSettings={() => setNav('settings')} />{projectModalOpen ? <ProjectModal onClose={() => setProjectModalOpen(false)} onCreate={createProject} /> : null}{toast ? <Toast message={toast} /> : null}</>
 
   return (
@@ -338,7 +380,7 @@ export default function App() {
           {nav === 'api' ? <ApiView operations={data.operations} /> : null}
           {nav === 'scenarios' ? <ScenarioWorkspace scenarios={data.scenarios} activeScenario={activeScenario} selectedId={selectedScenarioId} onSelect={setSelectedScenarioId} running={running} runMode={runMode} onModeChange={setRunMode} onRun={runScenario} onApprove={approveScenario} onSave={saveScenario} onNavigate={setNav} /> : null}
           {nav === 'reports' ? <ReportsView runs={dashboard.recent_runs} projectId={dashboard.project.id} onSelect={setSelectedRun} /> : null}
-          {nav === 'settings' ? <SettingsView key={llmConfiguration.updated_at ?? 'empty'} configuration={llmConfiguration} onSave={saveLlmConfiguration} onTest={testLlmConfiguration} /> : null}
+          {nav === 'settings' ? <SettingsView key={llmConfiguration.updated_at ?? 'empty'} configuration={llmConfiguration} mcpServers={mcpServers} onSave={saveLlmConfiguration} onTest={testLlmConfiguration} onSaveMcp={saveMcpServer} onDeleteMcp={deleteMcpServer} onTestMcp={testMcpServer} onDiscoverMcp={() => discoverTapdMcp('')} /> : null}
         </main>
       </div>
       {selectedRun ? <RunDrawer run={selectedRun} onClose={() => setSelectedRun(null)} /> : null}

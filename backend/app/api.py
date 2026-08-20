@@ -20,14 +20,18 @@ from .local_store import (
     get_secret,
     has_secret,
     mask_secret,
+    read_mcp_servers,
     set_secret,
     store_knowledge_file,
+    write_mcp_servers,
 )
 from .mcp_client import (
     McpError,
     discover_local_servers,
     fetch_tapd_requirements,
+    inspect_server,
     list_tapd_projects,
+    validate_managed_mcp_url,
     validate_registered_mcp_url,
 )
 from .models import (
@@ -55,6 +59,8 @@ from .schemas import (
     KnowledgeSearchResult,
     LlmConfigurationUpdate,
     LlmConfigurationView,
+    McpServerConfiguration,
+    McpServerConfigurationView,
     McpServerView,
     OperationView,
     ProjectCreate,
@@ -374,6 +380,132 @@ def list_sources(project_id: str, session: SessionDep) -> list[SourceConnectorVi
         .order_by(SourceConnector.created_at.desc())
     ).all()
     return [_source_view(row) for row in rows]
+
+
+def _managed_mcp_view(item: dict[str, object]) -> dict[str, object]:
+    """Return managed MCP metadata without serializing its write-only credential."""
+
+    server_id = str(item.get("id", ""))
+    return {
+        **item,
+        "has_secret": has_secret(f"mcp:{server_id}"),
+    }
+
+
+@router.get("/mcp/servers", response_model=list[McpServerConfigurationView])
+def list_managed_mcp_servers() -> list[dict[str, object]]:
+    """List user-managed MCP registrations stored outside the Git worktree."""
+
+    return [_managed_mcp_view(item) for item in read_mcp_servers()]
+
+
+@router.post(
+    "/mcp/servers",
+    response_model=McpServerConfigurationView,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_managed_mcp_server(payload: McpServerConfiguration) -> dict[str, object]:
+    """Register one HTTP MCP server and optionally persist a write-only credential."""
+
+    try:
+        endpoint_url = validate_managed_mcp_url(payload.endpoint_url)
+    except McpError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    now = utc_now().isoformat()
+    server_id = new_id("mcp")
+    item: dict[str, object] = {
+        "id": server_id,
+        "name": payload.name.strip(),
+        "endpoint_url": endpoint_url,
+        "transport": payload.transport,
+        "auth_type": payload.auth_type,
+        "auth_header": payload.auth_header.strip() or "Authorization",
+        "enabled": payload.enabled,
+        "created_at": now,
+        "updated_at": now,
+    }
+    if payload.secret is not None and payload.auth_type != "none":
+        set_secret(f"mcp:{server_id}", payload.secret.get_secret_value())
+    rows = read_mcp_servers()
+    rows.append(item)
+    write_mcp_servers(rows)
+    return _managed_mcp_view(item)
+
+
+@router.put("/mcp/servers/{server_id}", response_model=McpServerConfigurationView)
+def update_managed_mcp_server(
+    server_id: str,
+    payload: McpServerConfiguration,
+) -> dict[str, object]:
+    """Replace editable MCP metadata while preserving an omitted credential."""
+
+    rows = read_mcp_servers()
+    index = next((index for index, item in enumerate(rows) if item.get("id") == server_id), -1)
+    if index < 0:
+        raise HTTPException(status_code=404, detail="MCP Server 不存在")
+    try:
+        endpoint_url = validate_managed_mcp_url(payload.endpoint_url)
+    except McpError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    current = rows[index]
+    updated: dict[str, object] = {
+        "id": server_id,
+        "name": payload.name.strip(),
+        "endpoint_url": endpoint_url,
+        "transport": payload.transport,
+        "auth_type": payload.auth_type,
+        "auth_header": payload.auth_header.strip() or "Authorization",
+        "enabled": payload.enabled,
+        "created_at": current.get("created_at", utc_now().isoformat()),
+        "updated_at": utc_now().isoformat(),
+    }
+    secret_id = f"mcp:{server_id}"
+    if payload.auth_type == "none":
+        delete_secret(secret_id)
+    elif payload.secret is not None:
+        set_secret(secret_id, payload.secret.get_secret_value())
+    rows[index] = updated
+    write_mcp_servers(rows)
+    return _managed_mcp_view(updated)
+
+
+@router.delete("/mcp/servers/{server_id}")
+def delete_managed_mcp_server(server_id: str) -> dict[str, bool]:
+    """Delete one local MCP registration and its credential."""
+
+    rows = read_mcp_servers()
+    remaining = [item for item in rows if item.get("id") != server_id]
+    if len(remaining) == len(rows):
+        raise HTTPException(status_code=404, detail="MCP Server 不存在")
+    write_mcp_servers(remaining)
+    delete_secret(f"mcp:{server_id}")
+    return {"ok": True}
+
+
+@router.post("/mcp/servers/{server_id}:test", response_model=McpServerView)
+def test_managed_mcp_server(server_id: str) -> dict[str, Any]:
+    """Handshake with an enabled managed MCP endpoint and list sanitized capabilities."""
+
+    item = next((row for row in read_mcp_servers() if row.get("id") == server_id), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="MCP Server 不存在")
+    if item.get("enabled") is False:
+        raise HTTPException(status_code=422, detail="请先启用 MCP Server 再测试连接")
+    endpoint_url = str(item.get("endpoint_url", ""))
+    try:
+        return {"name": str(item.get("name", "MCP Server")), **inspect_server(endpoint_url, timeout=8.0)}
+    except (McpError, OSError) as exc:
+        return {
+            "name": str(item.get("name", "MCP Server")),
+            "endpoint_url": endpoint_url,
+            "transport": "streamable_http",
+            "connectable": False,
+            "tapd_capable": False,
+            "tools": [],
+            "project_tool": "",
+            "requirement_tool": "",
+            "error": str(exc),
+        }
 
 
 @router.post("/mcp/tapd:discover", response_model=list[McpServerView])

@@ -13,6 +13,8 @@ import type {
   SourceConnector,
   SourceConnectorCreate,
   McpServerCandidate,
+  McpServerConfiguration,
+  McpServerConfigurationUpdate,
   TapdMcpConnect,
   TapdMcpProjects,
   ApiSpecType,
@@ -60,6 +62,23 @@ export const api = {
     }),
   syncSource: (sourceId: string) =>
     request<DocumentItem>(`/api/sources/${sourceId}:sync`, { method: 'POST' }),
+  mcpServers: () => request<McpServerConfiguration[]>('/api/mcp/servers'),
+  createMcpServer: (payload: McpServerConfigurationUpdate) =>
+    request<McpServerConfiguration>('/api/mcp/servers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  updateMcpServer: (serverId: string, payload: McpServerConfigurationUpdate) =>
+    request<McpServerConfiguration>(`/api/mcp/servers/${serverId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  deleteMcpServer: (serverId: string) =>
+    request<{ ok: boolean }>(`/api/mcp/servers/${serverId}`, { method: 'DELETE' }),
+  testMcpServer: (serverId: string) =>
+    request<McpServerCandidate>(`/api/mcp/servers/${serverId}:test`, { method: 'POST' }),
   discoverTapdMcp: (endpointUrl = '') =>
     request<McpServerCandidate[]>('/api/mcp/tapd:discover', {
       method: 'POST',

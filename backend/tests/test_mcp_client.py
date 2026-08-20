@@ -64,6 +64,49 @@ Authorization = "private-test-header"
     )
 
 
+def test_claude_code_stdio_proxy_url_is_discovered_without_executing_command(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / ".claude.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "tapd-local": {
+                        "command": "cmd",
+                        "args": [
+                            "/c",
+                            "npx",
+                            "-y",
+                            "mcp-remote",
+                            "--url",
+                            "http://10.0.0.8:8111/mcp",
+                            "--token",
+                            "private-proxy-token",
+                        ],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mcp_client.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+
+    servers, stdio_names = mcp_client._config_candidates()
+
+    assert [(server.name, server.url) for server in servers] == [
+        ("Claude Code · tapd-local · 代理地址", "http://10.0.0.8:8111/mcp")
+    ]
+    assert stdio_names == []
+    assert servers[0].headers["Authorization"] == "Bearer private-proxy-token"
+    assert "private-proxy-token" not in repr(
+        {"name": servers[0].name, "endpoint_url": servers[0].url}
+    )
+    assert mcp_client.validate_registered_mcp_url("http://10.0.0.8:8111/mcp") == (
+        "http://10.0.0.8:8111/mcp"
+    )
+
+
 def test_failed_registered_server_remains_visible(monkeypatch) -> None:
     server = mcp_client.McpServerConfig(
         name="Codex · tapd",

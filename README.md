@@ -37,6 +37,7 @@ npm run dev
 
 - 需求文件支持 Markdown、TXT、DOCX、JSON 和 YAML。
 - TAPD 会读取 Codex、Cursor、Claude 等本机 MCP 注册信息，也会探测已经运行在回环地址上的 Streamable HTTP MCP Server。接入中心会自动执行 MCP 握手、发现只读工具、读取 TAPD 项目列表，并让用户选择一个项目后再建立绑定。
+- 系统设置提供通用 MCP Server 管理，支持新增、编辑、启停、删除和连接测试，也可扫描 Claude Code `~/.claude.json`、Codex、Cursor 和 VS Code 的已注册服务。
 - TAPD Token 由本地 MCP Server 自己的环境变量或私有配置管理，本工具只保存 MCP 回环地址、所选项目 ID 和工具名，不读取也不保存 TAPD Token。
 - 外部知识库使用可配置的公开 HTTPS 查询地址；Bearer、API Key Header 与 Basic 凭据均为只写 Secret。
 - 每个项目可以创建多个组件文件知识库，上传的原文件保存在 `backend/.local/knowledge/`，解析文本保存在本地 SQLite。
@@ -63,6 +64,8 @@ $env:AI_TEST_MCP_DISCOVERY_URLS="http://127.0.0.1:3333/mcp,http://127.0.0.1:9000
 环境只保存 Base URL、Allowlist、认证类型和 Secret 的操作系统环境变量名。例如 Bearer Token 使用 `TEST_API_TOKEN` 作为引用，真实值由启动后端的进程环境提供，不会写入数据库、Test IR 或报告。
 
 LLM Key、外部知识库凭据和知识库原文件保存在 `backend/.local/`；TAPD Token 保存在 MCP Server 自己的私有环境中。`backend/.local/`、`.env`、SQLite、虚拟环境和前端构建产物均已加入 `.gitignore`。Docker Compose 会把数据库和本地敏感数据统一挂载到命名卷 `/data`。可通过 `AI_TEST_LOCAL_DATA_PATH` 将本地敏感目录迁移到其他路径。
+
+用户管理的 MCP 元数据保存在 `backend/.local/mcp_servers.json`，认证值仍分离写入 `backend/.local/secrets.json`。扫描外部 MCP 配置时不会执行其中的 stdio 命令；远程列表也只显示地址 Origin，不展示可能承载访问标识的完整路径。
 
 ## 测试
 

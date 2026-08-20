@@ -19,6 +19,7 @@ LOCAL_DATA_ROOT = Path(
     )
 ).resolve()
 SECRETS_PATH = LOCAL_DATA_ROOT / "secrets.json"
+MCP_SERVERS_PATH = LOCAL_DATA_ROOT / "mcp_servers.json"
 _LOCK = RLock()
 
 
@@ -98,6 +99,38 @@ def mask_secret(secret_id: str) -> str:
         return ""
     suffix = secret[-4:] if len(secret) >= 4 else "••••"
     return f"••••••••{suffix}"
+
+
+def read_mcp_servers() -> list[dict[str, object]]:
+    """Read local-only MCP server metadata without resolving credentials."""
+
+    with _LOCK:
+        if not MCP_SERVERS_PATH.exists():
+            return []
+        try:
+            payload = json.loads(MCP_SERVERS_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, dict)]
+
+
+def write_mcp_servers(servers: list[dict[str, object]]) -> None:
+    """Atomically persist non-secret MCP metadata in the ignored local directory."""
+
+    with _LOCK:
+        LOCAL_DATA_ROOT.mkdir(parents=True, exist_ok=True)
+        temporary = MCP_SERVERS_PATH.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(servers, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        try:
+            os.chmod(temporary, 0o600)
+        except OSError:
+            pass
+        temporary.replace(MCP_SERVERS_PATH)
 
 
 def store_knowledge_file(
